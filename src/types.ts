@@ -95,3 +95,4 @@ export interface CollisionSettings {
   behavior: 'auto-number' | 'overwrite' | 'ask';
   outputFolderName: string; // for folder results default is "Processed"
 }
+

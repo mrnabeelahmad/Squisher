@@ -11,6 +11,7 @@ import ProcessingQueue from './components/ProcessingQueue';
 import VisualComparison from './components/VisualComparison';
 import VideoSquisher from './components/VideoSquisher';
 import { loadImage, processPipeline } from './components/ImageProcessingEngine';
+import squisherLogo from './assets/images/squisher_logo_1781852280538.jpg';
 import {
   Sparkles,
   Zap,
@@ -185,7 +186,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-slate-900 border border-cyan-500/30 rounded-xl flex items-center justify-center shadow-[0_0_15px_rgba(34,211,238,0.25)] overflow-hidden shrink-0">
               <img 
-                src="/src/assets/images/squisher_logo_1781852280538.jpg" 
+                src={squisherLogo} 
                 alt="Squisher Icon" 
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
