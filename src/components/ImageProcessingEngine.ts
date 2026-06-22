@@ -19,6 +19,77 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
 }
 
 /**
+ * Highly optimized client-side TIFF Encoder for 32-bit RGBA images.
+ * Produces standard, 100% compliant uncompressed TIFF files directly from canvas pixel buffers.
+ */
+export function encodeTIFF(width: number, height: number, rgbaData: Uint8ClampedArray): ArrayBuffer {
+  const metadataSize = 256;
+  const imageSize = width * height * 4;
+  const totalSize = metadataSize + imageSize;
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  // Little-endian header ('II')
+  view.setUint8(0, 0x49); // 'I'
+  view.setUint8(1, 0x49); // 'I'
+  view.setUint16(2, 42, true); // Magic Number 42
+  view.setUint32(4, 8, true); // Offset of the first IFD (8)
+
+  let offset = 8;
+  const numTags = 13;
+  view.setUint16(offset, numTags, true);
+  offset += 2;
+
+  const writeTag = (tag: number, type: number, count: number, val: number) => {
+    view.setUint16(offset, tag, true);
+    view.setUint16(offset + 2, type, true);
+    view.setUint32(offset + 4, count, true);
+    view.setUint32(offset + 8, val, true);
+    offset += 12;
+  };
+
+  // Directories MUST be sorted ascending by Tag ID
+  writeTag(256, 4, 1, width);                       // ImageWidth
+  writeTag(257, 4, 1, height);                      // ImageLength (Height)
+  writeTag(258, 3, 4, 182);                         // BitsPerSample: 8, 8, 8, 8 (offset to array)
+  writeTag(259, 3, 1, 1);                           // Compression: 1 (None / Uncompressed)
+  writeTag(262, 3, 1, 2);                           // PhotometricInterpretation: 2 (RGB)
+  writeTag(273, 4, 1, metadataSize);                 // StripOffsets (pixel data starts at offset 256)
+  writeTag(277, 3, 1, 4);                           // SamplesPerPixel: 4 (RGBA)
+  writeTag(278, 4, 1, height);                      // RowsPerStrip
+  writeTag(279, 4, 1, imageSize);                   // StripByteCounts
+  writeTag(282, 5, 1, 190);                         // XResolution (offset to rational value)
+  writeTag(283, 5, 1, 198);                         // YResolution (offset to rational value)
+  writeTag(296, 3, 1, 2);                           // ResolutionUnit: 2 (Inches)
+  writeTag(338, 3, 1, 1);                           // ExtraSamples: 1 (Associated Alpha / Transparent)
+
+  // Next IFD Offset (0 means only one image)
+  view.setUint32(offset, 0, true);
+
+  // Write array values at design offsets:
+  
+  // BitsPerSample (4 SHORTs representing RGBA channel bitdepths) at offset 182
+  view.setUint16(182, 8, true);
+  view.setUint16(184, 8, true);
+  view.setUint16(186, 8, true);
+  view.setUint16(188, 8, true);
+
+  // XResolution Rational [72, 1] (or 72 DPI) at offset 190
+  view.setUint32(190, 72, true);
+  view.setUint32(194, 1, true);
+
+  // YResolution Rational [72, 1] (or 72 DPI) at offset 198
+  view.setUint32(198, 72, true);
+  view.setUint32(202, 1, true);
+
+  // Copy standard canvas pixels (RGBA buffer bytes) directly into the image block
+  const pixelBytes = new Uint8Array(buffer, metadataSize, imageSize);
+  pixelBytes.set(rgbaData);
+
+  return buffer;
+}
+
+/**
  * Calculates anchor coordinates for cropping
  */
 export function getAnchorCoordinates(
@@ -286,6 +357,14 @@ export async function processPipeline(
           jpgQuality = cfg.jpgQuality / 100;
         } else if (cfg.format === 'png') {
           targetMimeType = 'image/png';
+        } else if (cfg.format === 'tiff') {
+          targetMimeType = 'image/tiff';
+        } else if (cfg.format === 'gif') {
+          targetMimeType = 'image/gif';
+        } else if (cfg.format === 'bmp') {
+          targetMimeType = 'image/bmp';
+        } else if (cfg.format === 'avif') {
+          targetMimeType = 'image/avif';
         }
         break;
       }
@@ -296,6 +375,40 @@ export async function processPipeline(
 
         compressQuality = cfg.quality / 100;
         compressReduceResolutionPattern = cfg.reduceResolutionPercentage;
+        break;
+      }
+
+      case 'rotate': {
+        const cfg = step.rotateConfig;
+        if (!cfg) break;
+
+        const angle = cfg.angle;
+        if (!angle) break;
+
+        const radians = (angle * Math.PI) / 180;
+        let nw = currentWidth;
+        let nh = currentHeight;
+
+        if (angle === 90 || angle === 270) {
+          nw = currentHeight;
+          nh = currentWidth;
+        }
+
+        const rotateCanvas = document.createElement('canvas');
+        rotateCanvas.width = nw;
+        rotateCanvas.height = nh;
+        const rotateCtx = rotateCanvas.getContext('2d');
+
+        if (rotateCtx) {
+          rotateCtx.translate(nw / 2, nh / 2);
+          rotateCtx.rotate(radians);
+          rotateCtx.drawImage(canvas, -currentWidth / 2, -currentHeight / 2);
+
+          canvas = rotateCanvas;
+          ctx = rotateCtx;
+          currentWidth = nw;
+          currentHeight = nh;
+        }
         break;
       }
     }
@@ -331,6 +444,28 @@ export async function processPipeline(
 
   // Export to Blob
   return new Promise((resolve, reject) => {
+    if (targetMimeType === 'image/tiff') {
+      try {
+        const renderCtx = canvas.getContext('2d');
+        if (!renderCtx) {
+          reject(new Error('Could not request Canvas context for TIFF encoding'));
+          return;
+        }
+        const imgData = renderCtx.getImageData(0, 0, currentWidth, currentHeight);
+        const tiffData = encodeTIFF(currentWidth, currentHeight, imgData.data);
+        const tiffBlob = new Blob([tiffData], { type: 'image/tiff' });
+        resolve({
+          blob: tiffBlob,
+          mimeType: 'image/tiff',
+          width: currentWidth,
+          height: currentHeight,
+        });
+      } catch (e: any) {
+        reject(new Error(`TIFF Encoding failed: ${e?.message || e}`));
+      }
+      return;
+    }
+
     canvas.toBlob(
       (blob) => {
         if (blob) {

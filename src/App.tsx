@@ -104,11 +104,28 @@ export default function App() {
         // Step C: Form final resource URL
         const processedUrl = URL.createObjectURL(outcome.blob);
 
+        let finalExtension = '';
+        if (outcome.mimeType === 'image/webp') finalExtension = '.webp';
+        else if (outcome.mimeType === 'image/jpeg') finalExtension = '.jpg';
+        else if (outcome.mimeType === 'image/png') finalExtension = '.png';
+        else if (outcome.mimeType === 'image/tiff') finalExtension = '.tiff';
+        else if (outcome.mimeType === 'image/gif') finalExtension = '.gif';
+        else if (outcome.mimeType === 'image/bmp') finalExtension = '.bmp';
+        else if (outcome.mimeType === 'image/avif') finalExtension = '.avif';
+
         setResults((prev) =>
           prev.map((r) => {
             if (r.sourceId === source.id) {
+              let finalName = r.name;
+              if (finalExtension) {
+                const lastDot = r.name.lastIndexOf('.');
+                const baseName = lastDot !== -1 ? r.name.substring(0, lastDot) : r.name;
+                finalName = `${baseName}${finalExtension}`;
+              }
+
               return {
                 ...r,
+                name: finalName,
                 processedSize: outcome.blob.size,
                 status: 'success',
                 processedUrl,
@@ -146,6 +163,18 @@ export default function App() {
     setResults((prev) =>
       prev.map((r) => (r.id === id ? { ...r, name: newName } : r))
     );
+  };
+
+  const handleBulkRenameResults = (updates: { id: string; newName: string }[]) => {
+    setResults((prev) => {
+      const updateMap = new Map(updates.map((u) => [u.id, u.newName]));
+      return prev.map((r) => {
+        if (updateMap.has(r.id)) {
+          return { ...r, name: updateMap.get(r.id)! };
+        }
+        return r;
+      });
+    });
   };
 
   return (
@@ -264,6 +293,7 @@ export default function App() {
                   files={files}
                   onSelectResultForCompare={setSelectedCompare}
                   onRenameResult={handleRenameResult}
+                  onBulkRename={handleBulkRenameResults}
                 />
               </section>
             </div>

@@ -16,7 +16,11 @@ export type CropAnchor =
   | 'bottom'
   | 'bottom-right';
 
-export type StepType = 'crop' | 'resize' | 'convert' | 'compress';
+export type StepType = 'crop' | 'resize' | 'convert' | 'compress' | 'rotate';
+
+export interface RotateStepConfig {
+  angle: 90 | 180 | 270;
+}
 
 export interface CropStepConfig {
   mode: 'ratio' | 'pixels' | 'percentage';
@@ -39,7 +43,7 @@ export interface ResizeStepConfig {
 }
 
 export interface ConvertStepConfig {
-  format: 'webp' | 'png' | 'jpeg';
+  format: 'webp' | 'png' | 'jpeg' | 'tiff' | 'gif' | 'bmp' | 'avif';
   webpQuality: number; // For webp aggressive compression
   jpgQuality: number;
 }
@@ -57,6 +61,7 @@ export interface PipelineStep {
   resizeConfig?: ResizeStepConfig;
   convertConfig?: ConvertStepConfig;
   compressConfig?: CompressStepConfig;
+  rotateConfig?: RotateStepConfig;
 }
 
 export interface SourceFile {

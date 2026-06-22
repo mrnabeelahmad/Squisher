@@ -4,8 +4,6 @@ import fs from 'fs';
 import { exec, execSync } from 'child_process';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
-import ytdl from '@distube/ytdl-core';
-import { Readable } from 'stream';
 
 const app = express();
 const PORT = 3000;
@@ -66,163 +64,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// API: YouTube link downloader & metadata extractor
-app.post('/api/youtube-import', async (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'No YouTube URL provided' });
-  }
-
-  // Basic validate
-  if (!url.includes('youtube.com/') && !url.includes('youtu.be/')) {
-    return res.status(400).json({ error: 'Invalid YouTube URL format' });
-  }
-
-  try {
-    console.log('Fetching YouTube video metadata for (ytdl):', url);
-    const info = await ytdl.getInfo(url);
-    const title = info.videoDetails.title || 'YouTube Imported Video';
-    const duration = parseInt(info.videoDetails.lengthSeconds) || 0;
-    const author = info.videoDetails.author?.name || 'YouTube Creator';
-
-    // Locate the best available format that matches our web playback needs (has video and audio)
-    let selectedFormat;
-    try {
-      selectedFormat = ytdl.chooseFormat(info.formats, {
-        filter: 'audioandvideo',
-        quality: 'highest'
-      });
-    } catch {
-      selectedFormat = info.formats.find(f => f.hasVideo && f.hasAudio) || info.formats[0];
-    }
-
-    if (!selectedFormat) {
-      throw new Error('No compatible video format found for this YouTube link');
-    }
-
-    const container = selectedFormat.container || 'mp4';
-    const filename = `yt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${container}`;
-    const filePath = path.join(uploadsDir, filename);
-
-    console.log(`Downloading stream format ${selectedFormat.qualityLabel || selectedFormat.itag} to ${filePath}...`);
-
-    const stream = ytdl(url, { format: selectedFormat });
-    const writeStream = fs.createWriteStream(filePath);
-
-    await new Promise<void>((resolve, reject) => {
-      stream.pipe(writeStream);
-      stream.on('end', () => resolve());
-      stream.on('error', (err) => reject(err));
-      writeStream.on('error', (err) => reject(err));
-    });
-
-    console.log(`YouTube video downloaded successfully via ytdl: ${filename}`);
-
-    return res.json({
-      success: true,
-      filename,
-      title,
-      duration,
-      author,
-      url: `/api/video/${filename}`
-    });
-
-  } catch (err: any) {
-    console.warn(`Primary ytdl extraction failed: ${err.message || err}. Attempting high performance Cobalt proxy fallback...`);
-
-    try {
-      const cobaltEndpoints = [
-        'https://api.cobalt.tools/api/json',
-        'https://co.wuk.sh/api/json'
-      ];
-
-      let cobaltData: any = null;
-      let usedEndpoint = '';
-
-      for (const endpoint of cobaltEndpoints) {
-        try {
-          console.log(`Trying Cobalt endpoint: ${endpoint}`);
-          const cResponse = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              url: url.trim(),
-              videoQuality: '720',
-              filenameStyle: 'classic'
-            })
-          });
-
-          if (cResponse.ok) {
-            const data: any = await cResponse.json();
-            if (data && (data.status === 'stream' || data.status === 'redirect' || data.status === 'picker') && data.url) {
-              cobaltData = data;
-              usedEndpoint = endpoint;
-              break;
-            } else if (data && data.status === 'error') {
-              console.warn(`Cobalt endpoint ${endpoint} error response:`, data.text);
-            }
-          } else {
-            console.warn(`Cobalt endpoint ${endpoint} status not OK: ${cResponse.status}`);
-          }
-        } catch (subErr: any) {
-          console.warn(`Error connecting to Cobalt endpoint ${endpoint}:`, subErr.message || subErr);
-        }
-      }
-
-      if (!cobaltData || !cobaltData.url) {
-        throw new Error('All available cloud downloader APIs returned empty or error responses.');
-      }
-
-      console.log('Cobalt success! Target download URL:', cobaltData.url);
-      const downloadUrl = cobaltData.url;
-      const title = cobaltData.filename || 'YouTube Downloaded Video';
-
-      const container = 'mp4';
-      const filename = `yt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${container}`;
-      const filePath = path.join(uploadsDir, filename);
-
-      console.log(`Downloading stream from Cobalt block-bypass link to ${filePath}...`);
-
-      const vResponse = await fetch(downloadUrl);
-      if (!vResponse.ok) {
-        throw new Error(`Failed to read from Cobalt file resource: ${vResponse.statusText}`);
-      }
-
-      const fileStream = fs.createWriteStream(filePath);
-      if (vResponse.body) {
-        await new Promise<void>((resolve, reject) => {
-          const nodeStream = Readable.fromWeb(vResponse.body as any);
-          nodeStream.pipe(fileStream);
-          nodeStream.on('error', reject);
-          fileStream.on('finish', resolve);
-          fileStream.on('error', reject);
-        });
-      } else {
-        throw new Error('Fallback blockstream body was empty');
-      }
-
-      console.log(`YouTube video downloaded successfully via Cobalt stream: ${filename}`);
-
-      return res.json({
-        success: true,
-        filename,
-        title,
-        duration: 30, // Default duration placeholder
-        author: 'YouTube',
-        url: `/api/video/${filename}`
-      });
-
-    } catch (fallbackErr: any) {
-      console.error('All YouTube extraction layers failed:', fallbackErr);
-      return res.status(500).json({
-        error: `All automated extraction pipelines (including Google-Cloud rate filters and standard Cobalt fallbacks) failed. (Details: ${fallbackErr.message || fallbackErr}). YouTube frequently blocks server-side scraping in sandboxed hosting centers. Please upload standard video files directly via the Drag-and-Drop Uploader instead.`
-      });
-    }
-  }
-});
 
 // API: Serves uploaded/completed videos with correct Content-Type and streaming/seeking support
 app.get('/api/video/:filename', (req, res) => {
@@ -269,31 +110,13 @@ app.get('/api/video/:filename', (req, res) => {
 
 // API: Process video route
 app.post('/api/process-video', upload.single('video'), async (req, res) => {
-  let inputPath = '';
-  let originalName = '';
-  let originalSize = 0;
-  const isYoutube = !!req.body.youtubeFilename;
-
-  if (req.file) {
-    inputPath = req.file.path;
-    originalName = req.file.originalname;
-    originalSize = req.file.size;
-  } else if (req.body.youtubeFilename) {
-    const safeYoutubeFilename = path.basename(req.body.youtubeFilename);
-    const resolvedPath = path.join(uploadsDir, safeYoutubeFilename);
-    if (!fs.existsSync(resolvedPath)) {
-      return res.status(400).json({ error: 'YouTube source file has migrated or is no longer available' });
-    }
-    inputPath = resolvedPath;
-    originalName = req.body.youtubeTitle || 'YouTube Video';
-    try {
-      originalSize = fs.statSync(resolvedPath).size;
-    } catch {
-      originalSize = 15 * 1024 * 1024;
-    }
-  } else {
-    return res.status(400).json({ error: 'No video file or YouTube reference provided' });
+  if (!req.file) {
+    return res.status(400).json({ error: 'No video file provided' });
   }
+
+  const inputPath = req.file.path;
+  const originalName = req.file.originalname;
+  const originalSize = req.file.size;
 
   // Retrieve squishing params
   const {
@@ -315,7 +138,8 @@ app.post('/api/process-video', upload.single('video'), async (req, res) => {
     cropX,
     cropY,
     destWidth,
-    destHeight
+    destHeight,
+    videoRotation = '0'
   } = req.body;
 
   const outputExt = outputFormat === 'webm' ? 'webm' : 'mp4';
@@ -351,6 +175,16 @@ app.post('/api/process-video', upload.single('video'), async (req, res) => {
 
   // Assemble ffmpeg filters
   const filters: string[] = [];
+
+  // Video rotation (transpose)
+  const rotAngle = parseInt(String(videoRotation)) || 0;
+  if (rotAngle === 90) {
+    filters.push('transpose=1');
+  } else if (rotAngle === 180) {
+    filters.push('transpose=2,transpose=2');
+  } else if (rotAngle === 270) {
+    filters.push('transpose=2');
+  }
 
   // Cropping
   if (cropPreset !== 'none' && cropWidth && cropHeight) {
@@ -470,12 +304,10 @@ app.post('/api/process-video', upload.single('video'), async (req, res) => {
   } catch (statErr: any) {
     return res.status(500).json({ error: `Resulting file validation failed: ${statErr.message}` });
   } finally {
-    // Asynchronously delete the temporary raw input video only if it's an uploaded file
-    if (!isYoutube) {
-      fs.unlink(inputPath, (unlinkErr) => {
-        if (unlinkErr) console.warn('Temp input file removal failed:', unlinkErr);
-      });
-    }
+    // Asynchronously delete the temporary raw input video to keep disk usage pristine
+    fs.unlink(inputPath, (unlinkErr) => {
+      if (unlinkErr) console.warn('Temp input file removal failed:', unlinkErr);
+    });
   }
 });
 

@@ -13,6 +13,7 @@ import {
   ResizeStepConfig,
   ConvertStepConfig,
   CompressStepConfig,
+  RotateStepConfig,
 } from '../types';
 import {
   ArrowUp,
@@ -70,6 +71,10 @@ const DEFAULT_COMPRESS: CompressStepConfig = {
   reduceResolutionPercentage: 0,
 };
 
+const DEFAULT_ROTATE: RotateStepConfig = {
+  angle: 90,
+};
+
 export default function PipelineBuilder({
   steps,
   setSteps,
@@ -89,6 +94,7 @@ export default function PipelineBuilder({
       resizeConfig: type === 'resize' ? { ...DEFAULT_RESIZE } : undefined,
       convertConfig: type === 'convert' ? { ...DEFAULT_CONVERT } : undefined,
       compressConfig: type === 'compress' ? { ...DEFAULT_COMPRESS } : undefined,
+      rotateConfig: type === 'rotate' ? { ...DEFAULT_ROTATE } : undefined,
     };
     setSteps((prev) => [...prev, newStep]);
     setActiveStepId(id);
@@ -170,12 +176,27 @@ export default function PipelineBuilder({
     );
   };
 
+  const updateRotateConfig = (id: string, updates: Partial<RotateStepConfig>) => {
+    setSteps((prev) =>
+      prev.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              rotateConfig: { ...(s.rotateConfig || DEFAULT_ROTATE), ...updates },
+            }
+          : s
+      )
+    );
+  };
+
   const getStepIcon = (type: StepType) => {
     switch (type) {
       case 'crop':
         return <Crop className="h-5 w-5 text-amber-500" />;
       case 'resize':
         return <Maximize2 className="h-5 w-5 text-sky-500" />;
+      case 'rotate':
+        return <RotateCcw className="h-5 w-5 text-cyan-500" />;
       case 'convert':
         return <FileImage className="h-5 w-5 text-emerald-500" />;
       case 'compress':
@@ -189,6 +210,8 @@ export default function PipelineBuilder({
         return `Smart Crop (${step.cropConfig?.mode || 'Ratio'})`;
       case 'resize':
         return `Resize (${step.resizeConfig?.mode || 'Percentage'})`;
+      case 'rotate':
+        return `Orient / Rotate (${step.rotateConfig?.angle || 90}°)`;
       case 'convert':
         return `Convert to ${step.convertConfig?.format.toUpperCase() || 'WEBP'}`;
       case 'compress':
@@ -221,11 +244,12 @@ export default function PipelineBuilder({
       </div>
 
       {/* Grid of Add Step Buttons */}
-      <div id="add-step-triggers" className="grid grid-cols-4 gap-2 mb-4">
+      <div id="add-step-triggers" className="grid grid-cols-5 gap-2 mb-4">
         {[
           { type: 'crop', label: 'Crop', icon: <Crop className="h-4 w-4" />, bg: 'hover:bg-amber-955/20 text-amber-400 hover:border-amber-500/30' },
           { type: 'resize', label: 'Resize', icon: <Maximize2 className="h-4 w-4" />, bg: 'hover:bg-sky-955/20 text-sky-400 hover:border-sky-500/30' },
-          { type: 'convert', label: 'Convert', icon: <FileImage className="h-4 w-4" />, bg: 'hover:bg-emerald-955/20 text-emerald-400 hover:border-emerald-500/30' },
+          { type: 'rotate', label: 'Orient', icon: <RotateCcw className="h-4 w-4 text-cyan-400" />, bg: 'hover:bg-cyan-955/20 text-cyan-400 hover:border-cyan-500/30' },
+          { type: 'convert', label: 'Convert', icon: <FileImage className="h-4 w-4 animate-pulse-slow" />, bg: 'hover:bg-emerald-955/20 text-emerald-400 hover:border-emerald-500/30' },
           { type: 'compress', label: 'Compress', icon: <Percent className="h-4 w-4" />, bg: 'hover:bg-fuchsia-955/20 text-fuchsia-400 hover:border-fuchsia-500/30' },
         ].map((item) => (
           <button
@@ -248,8 +272,8 @@ export default function PipelineBuilder({
           <div className="h-full flex flex-col items-center justify-center text-center p-8 border border-dashed border-slate-800 rounded-2xl bg-slate-950/20">
             <Settings className="h-8 w-8 text-slate-705 text-slate-700 stroke-[1.5] mb-2 animate-pulse" />
             <p className="text-xs font-semibold text-slate-400">No steps in pipeline</p>
-            <p className="text-[11px] text-slate-500 mt-1 max-w-[200px]">
-              Add a Crop, Resize, Format Conversion, or Compression step above.
+            <p className="text-[11px] text-slate-505 mt-1 max-w-[200px] text-slate-500 font-medium">
+              Add a Crop, Resize, Rotation, Convert, or Compress step above.
             </p>
           </div>
         ) : (
@@ -603,13 +627,13 @@ export default function PipelineBuilder({
                       <div className="space-y-3.5 animate-fade-in">
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Target Export Format</label>
-                          <div className="flex gap-1.5">
-                            {(['webp', 'png', 'jpeg'] as const).map((fmt) => (
+                          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-1.5">
+                            {(['webp', 'png', 'jpeg', 'tiff', 'gif', 'bmp', 'avif'] as const).map((fmt) => (
                               <button
                                 key={fmt}
                                 id={`convert-format-${fmt}`}
                                 onClick={() => updateConvertConfig(step.id, { format: fmt })}
-                                className={`flex-1 py-1.5 px-2 border rounded-md font-bold text-[11px] uppercase tracking-wider text-center transition cursor-pointer ${
+                                className={`py-1.5 px-2 border rounded-md font-bold text-[10px] uppercase tracking-wider text-center transition cursor-pointer ${
                                   step.convertConfig?.format === fmt
                                     ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
                                     : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:bg-slate-900'
@@ -671,8 +695,44 @@ export default function PipelineBuilder({
                         )}
 
                         {step.convertConfig.format === 'png' && (
-                          <div className="bg-emerald-950/20 p-2.5 rounded-lg border border-emerald-900/30 text-emerald-400 leading-normal text-[11px] font-semibold">
+                          <div className="bg-emerald-950/20 p-2.5 rounded-lg border border-emerald-900/30 text-emerald-400 leading-normal text-[11px] font-semibold font-semibold">
                             PNG is a lossless format. Dimensions and transparent pixel levels are perfectly preserved.
+                          </div>
+                        )}
+
+                        {step.convertConfig.format === 'tiff' && (
+                          <div className="bg-cyan-950/25 p-3 rounded-xl border border-cyan-500/20 text-cyan-400 leading-normal text-[11px] font-semibold space-y-1">
+                            <p className="font-bold text-cyan-300 flex items-center gap-1.5">🖼️ TIFF: Archival High-Fidelity & Publishing</p>
+                            <p className="text-slate-400 font-normal leading-relaxed">
+                              Converts image to fully uncompressed 32-bit RGBA TIFF utilizing Squisher's custom high-optimized client-side encoder. Retains perfect master print quality with transparent alpha mapping. Recommended for professional publishers or original archiving.
+                            </p>
+                          </div>
+                        )}
+
+                        {step.convertConfig.format === 'gif' && (
+                          <div className="bg-amber-950/25 p-3 rounded-xl border border-amber-500/20 text-amber-450 text-amber-400 leading-normal text-[11px] font-semibold space-y-1">
+                            <p className="font-bold text-amber-305 text-amber-350 flex items-center gap-1.5">🎨 GIF: Graphics Interchange Format</p>
+                            <p className="text-slate-400 font-normal leading-relaxed">
+                              Generates lossless indexed color frames. Standard, highly portable image standard optimized for graphic designs, vector art, and simple pixel-perfect assets.
+                            </p>
+                          </div>
+                        )}
+
+                        {step.convertConfig.format === 'bmp' && (
+                          <div className="bg-blue-950/25 p-3 rounded-xl border border-blue-500/20 text-blue-450 leading-normal text-[11px] font-semibold space-y-1">
+                            <p className="font-bold text-blue-300 flex items-center gap-1.5">💽 BMP: Windows Bitmap Format</p>
+                            <p className="text-slate-400 font-normal leading-relaxed">
+                              Renders uncompressed pixel raster streams. Natively readable across all legacy and modern OS devices, offering zero compression artifacts and immediate rendering speeds.
+                            </p>
+                          </div>
+                        )}
+
+                        {step.convertConfig.format === 'avif' && (
+                          <div className="bg-fuchsia-950/25 p-3 rounded-xl border border-fuchsia-500/20 text-fuchsia-400 leading-normal text-[11px] font-semibold space-y-1">
+                            <p className="font-bold text-fuchsia-300 flex items-center gap-1.5">🚀 AVIF: Next-Gen Media Compression</p>
+                            <p className="text-slate-400 font-normal leading-relaxed">
+                              Employs cutting-edge AV1 video frame compression. Achieves up to 50% smaller sizes than standard JPEGs while keeping rich image fidelity, clean boundaries, and modern HDR range capabilities.
+                            </p>
                           </div>
                         )}
                       </div>
@@ -718,6 +778,34 @@ export default function PipelineBuilder({
                           />
                           <p className="text-[10px] text-slate-500 leading-relaxed font-semibold">
                             Shrinks width and height coordinates proportionally to yield optimized web payloads.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 5. ROTATE STEP CONFIGURATION */}
+                    {step.type === 'rotate' && step.rotateConfig && (
+                      <div className="space-y-3.5 animate-fade-in">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Relative Media Rotation</label>
+                          <div className="flex gap-1.5">
+                            {([90, 180, 270] as const).map((angle) => (
+                              <button
+                                key={angle}
+                                id={`rotate-angle-${angle}`}
+                                onClick={() => updateRotateConfig(step.id, { angle })}
+                                className={`flex-1 py-1.5 px-2.5 border rounded-lg font-bold text-[11px] uppercase tracking-wider text-center transition cursor-pointer ${
+                                  step.rotateConfig?.angle === angle
+                                    ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.15)]'
+                                    : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:bg-slate-900'
+                                }`}
+                              >
+                                Rotate {angle}°
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-slate-505 leading-normal italic mt-2 text-slate-500 font-medium">
+                            Rotates the canvas coordinates relative to orientation. Rotating by 90° or 270° swaps aspect width and height.
                           </p>
                         </div>
                       </div>

@@ -18,8 +18,6 @@ import {
   Volume2,
   FileVideo,
   ChevronDown,
-  Youtube,
-  Link2,
   Share2
 } from 'lucide-react';
 
@@ -44,13 +42,7 @@ export default function VideoSquisher() {
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [videoMeta, setVideoMeta] = useState<{ width: number; height: number; duration: number } | null>(null);
 
-  // YouTube states
-  const [youtubeUrlInput, setYoutubeUrlInput] = useState('');
-  const [isImportingYoutube, setIsImportingYoutube] = useState(false);
-  const [youtubeImportError, setYoutubeImportError] = useState('');
-  const [youtubeFilename, setYoutubeFilename] = useState('');
-  const [youtubeTitle, setYoutubeTitle] = useState('');
-  const [sourceTab, setSourceTab] = useState<'local' | 'youtube'>('local');
+
 
   // Playback control states
   const [isPlaying, setIsPlaying] = useState(false);
@@ -68,6 +60,10 @@ export default function VideoSquisher() {
   const [targetFps, setTargetFps] = useState<number>(30); // 15, 24, 30
   const [stripAudio, setStripAudio] = useState<boolean>(false);
   const [outputFormat, setOutputFormat] = useState<'webm' | 'mp4'>('webm');
+
+  // Orientation & Crop Focus Area Options
+  const [videoRotation, setVideoRotation] = useState<0 | 90 | 180 | 270>(0);
+  const [cropFocus, setCropFocus] = useState<'center' | 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'bottom-right'>('center');
 
   // Text Overlay Options
   const [overlayText, setOverlayText] = useState<string>('');
@@ -140,78 +136,7 @@ export default function VideoSquisher() {
     };
   };
 
-  const handleYoutubeImport = async (urlToFetch?: string) => {
-    const url = urlToFetch || youtubeUrlInput;
-    if (!url || !url.trim()) return;
-    setIsImportingYoutube(true);
-    setYoutubeImportError('');
-    setIsPlaying(false);
-    setCurrentTime(0);
 
-    // Reset previous loaded states
-    setVideoFile(null);
-    setVideoUrl('');
-    setVideoMeta(null);
-    setYoutubeFilename('');
-    setYoutubeTitle('');
-
-    try {
-      const response = await fetch('/api/youtube-import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to import YouTube video');
-      }
-
-      // Successful download! Set results
-      const simulatedFile = {
-        name: data.title,
-        size: 0, // Youtube stream size placeholder
-        type: 'video/mp4'
-      } as any;
-
-      setVideoFile(simulatedFile);
-      setYoutubeFilename(data.filename);
-      setYoutubeTitle(data.title);
-      setVideoUrl(data.url);
-
-      // Now fetch metadata from local source url
-      const tempVideo = document.createElement('video');
-      tempVideo.src = data.url;
-      tempVideo.crossOrigin = 'anonymous';
-      tempVideo.preload = 'metadata';
-      tempVideo.onloadedmetadata = () => {
-        setVideoMeta({
-          width: tempVideo.videoWidth || 1280,
-          height: tempVideo.videoHeight || 720,
-          duration: tempVideo.duration || data.duration || 0,
-        });
-        setTrimStart(0);
-        setTrimEnd(Math.min(tempVideo.duration || data.duration || 0, 30)); // default to max 30s for fast preview
-        setIsImportingYoutube(false);
-      };
-      tempVideo.onerror = () => {
-        // Fallback metadata
-        setVideoMeta({
-          width: 1280,
-          height: 720,
-          duration: data.duration || 0,
-        });
-        setTrimStart(0);
-        setTrimEnd(Math.min(data.duration || 30, 30));
-        setIsImportingYoutube(false);
-      };
-
-    } catch (err: any) {
-      console.error('YouTube import helper crashed:', err);
-      setYoutubeImportError(err.message || 'An unexpected connection error occurred.');
-      setIsImportingYoutube(false);
-    }
-  };
 
   // Video playback listeners
   const togglePlay = () => {
@@ -336,52 +261,69 @@ export default function VideoSquisher() {
       // 1. Resolve output coordinates & crops
       let origWidth = videoMeta.width;
       let origHeight = videoMeta.height;
+
+      // When rotating 90 or 270, the ffmpeg transpose runs first, swapping raw bounds.
+      // So crop dimensions must refer to the swapped dimensions!
+      if (videoRotation === 90 || videoRotation === 270) {
+        origWidth = videoMeta.height;
+        origHeight = videoMeta.width;
+      }
       
       // Handle crop boundaries
       let cropWidth = origWidth;
       let cropHeight = origHeight;
-      let cropX = 0;
-      let cropY = 0;
 
       if (cropPreset === '1:1') {
         const side = Math.min(origWidth, origHeight);
         cropWidth = side;
         cropHeight = side;
-        cropX = Math.round((origWidth - side) / 2);
-        cropY = Math.round((origHeight - side) / 2);
       } else if (cropPreset === '16:9') {
         // Landscape
         const targetHeight = Math.round((origWidth * 9) / 16);
         if (targetHeight <= origHeight) {
           cropHeight = targetHeight;
-          cropY = Math.round((origHeight - targetHeight) / 2);
         } else {
           const targetWidth = Math.round((origHeight * 16) / 9);
           cropWidth = targetWidth;
-          cropX = Math.round((origWidth - targetWidth) / 2);
         }
       } else if (cropPreset === '9:16') {
         // Portrait / TikTok format
         const targetWidth = Math.round((origHeight * 9) / 16);
         if (targetWidth <= origWidth) {
           cropWidth = targetWidth;
-          cropX = Math.round((origWidth - targetWidth) / 2);
         } else {
           const targetHeight = Math.round((origWidth * 16) / 9);
           cropHeight = targetHeight;
-          cropY = Math.round((origHeight - targetHeight) / 2);
         }
       } else if (cropPreset === '4:3') {
         // Academy ratio
         const targetWidth = Math.round((origHeight * 4) / 3);
         if (targetWidth <= origWidth) {
           cropWidth = targetWidth;
-          cropX = Math.round((origWidth - targetWidth) / 2);
         } else {
           const targetHeight = Math.round((origWidth * 3) / 4);
           cropHeight = targetHeight;
-          cropY = Math.round((origHeight - targetHeight) / 2);
         }
+      }
+
+      // 2. Apply Custom focus area alignment
+      let cropX = Math.round((origWidth - cropWidth) / 2);
+      let cropY = Math.round((origHeight - cropHeight) / 2);
+
+      if (cropFocus === 'top') {
+        cropY = 0;
+      } else if (cropFocus === 'bottom') {
+        cropY = Math.max(0, origHeight - cropHeight);
+      } else if (cropFocus === 'left') {
+        cropX = 0;
+      } else if (cropFocus === 'right') {
+        cropX = Math.max(0, origWidth - cropWidth);
+      } else if (cropFocus === 'top-left') {
+        cropX = 0;
+        cropY = 0;
+      } else if (cropFocus === 'bottom-right') {
+        cropX = Math.max(0, origWidth - cropWidth);
+        cropY = Math.max(0, origHeight - cropHeight);
       }
 
       // Apply proportional scale down-scale (pixel reduction!)
@@ -393,12 +335,7 @@ export default function VideoSquisher() {
 
       // Prepare FormData payload for upload
       const formData = new FormData();
-      if (youtubeFilename) {
-        formData.append('youtubeFilename', youtubeFilename);
-        formData.append('youtubeTitle', youtubeTitle);
-      } else {
-        formData.append('video', videoFile);
-      }
+      formData.append('video', videoFile);
       formData.append('cropPreset', cropPreset);
       formData.append('resolutionScale', String(resolutionScale));
       formData.append('videoBitrate', String(videoBitrate));
@@ -418,6 +355,8 @@ export default function VideoSquisher() {
       formData.append('cropY', String(cropY));
       formData.append('destWidth', String(destWidth));
       formData.append('destHeight', String(destHeight));
+      formData.append('videoRotation', String(videoRotation));
+      formData.append('cropFocus', cropFocus);
 
       const response = await fetch('/api/process-video', {
         method: 'POST',
@@ -495,9 +434,8 @@ export default function VideoSquisher() {
                   setVideoFile(null);
                   setVideoUrl('');
                   setVideoMeta(null);
-                  setYoutubeFilename('');
-                  setYoutubeTitle('');
-                  setYoutubeUrlInput('');
+                  setVideoRotation(0);
+                  setCropFocus('center');
                 }}
                 className="text-[11px] font-semibold text-rose-450 hover:text-rose-400 bg-rose-950/20 px-2.5 py-1.5 rounded-lg border border-rose-900/45 cursor-pointer flex items-center gap-1"
               >
@@ -507,128 +445,23 @@ export default function VideoSquisher() {
           </div>
 
           {!videoFile ? (
-            <div className="space-y-4">
-              {/* Source Mode Tabs */}
-              <div className="flex border-b border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setSourceTab('local')}
-                  className={`flex-1 py-2 text-center text-xs font-bold uppercase border-b-2 transition-all cursor-pointer ${
-                    sourceTab === 'local'
-                      ? 'border-cyan-500 text-cyan-400 font-extrabold'
-                      : 'border-transparent text-slate-500 hover:text-slate-300'
-                  }`}
-                >
-                  Local Dynamic Upload
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceTab('youtube')}
-                  className={`flex-1 py-2 text-center text-xs font-bold uppercase border-b-2 transition-all cursor-pointer ${
-                    sourceTab === 'youtube'
-                      ? 'border-cyan-500 text-cyan-400 font-extrabold'
-                      : 'border-transparent text-slate-500 hover:text-slate-300'
-                  }`}
-                >
-                  Import YouTube Link
-                </button>
+            <label id="video-dropzone" className="border-2 border-dashed border-slate-800 hover:border-cyan-500/30 transition bg-slate-950/40 rounded-2xl p-8 py-10 flex flex-col items-center justify-center text-center cursor-pointer group">
+              <input 
+                type="file" 
+                accept="video/*" 
+                onChange={handleVideoSelect} 
+                className="hidden" 
+              />
+              <div className="p-3.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 group-hover:scale-105 transition shadow-sm mb-3.5">
+                <Video className="h-6 w-6 text-cyan-400" />
               </div>
-
-              {sourceTab === 'local' ? (
-                <label id="video-dropzone" className="border-2 border-dashed border-slate-800 hover:border-cyan-500/30 transition bg-slate-950/40 rounded-2xl p-8 py-10 flex flex-col items-center justify-center text-center cursor-pointer group">
-                  <input 
-                    type="file" 
-                    accept="video/*" 
-                    onChange={handleVideoSelect} 
-                    className="hidden" 
-                  />
-                  <div className="p-3.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 group-hover:scale-105 transition shadow-sm mb-3.5">
-                    <Video className="h-6 w-6 text-cyan-400" />
-                  </div>
-                  <p className="text-sm font-semibold text-slate-200">
-                    Drag-and-Drop Video File Or Browse
-                  </p>
-                  <p className="text-[11px] text-slate-500 mt-2 max-w-[280px]">
-                    Supported formats: MP4, WebM, QuickTime. Processed securely inside your offline sandboxed browser workspace.
-                  </p>
-                </label>
-              ) : (
-                <div className="p-5 bg-slate-950/40 border border-slate-850 rounded-2xl space-y-4">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">PASTE YOUTUBE VIDEO LINK</label>
-                    <div className="flex flex-col sm:flex-row items-stretch gap-2">
-                      <div className="relative flex-1">
-                        <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500">
-                          <Link2 className="h-4 w-4" />
-                        </span>
-                        <input
-                          type="text"
-                          placeholder="https://www.youtube.com/watch?v=..."
-                          value={youtubeUrlInput}
-                          onChange={(e) => setYoutubeUrlInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleYoutubeImport();
-                            }
-                          }}
-                          className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-850 rounded-xl text-xs text-slate-100 placeholder-slate-600 focus:outline-hidden focus:border-cyan-500"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleYoutubeImport()}
-                        disabled={isImportingYoutube || !youtubeUrlInput.trim()}
-                        className={`px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-slate-955 text-slate-950 font-bold text-xs rounded-xl transition shadow-lg shrink-0 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        {isImportingYoutube ? (
-                          <>
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Downloading...
-                          </>
-                        ) : (
-                          <>
-                            <Youtube className="h-3.5 w-3.5 fill-slate-950" /> Extract Video
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Suggest some high performance sample links */}
-                  <div className="space-y-2 pt-2 border-t border-slate-900">
-                    <span className="text-[10px] text-slate-500 uppercase font-black block tracking-widest">Recommended Sample Links</span>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setYoutubeUrlInput('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-                          handleYoutubeImport('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-                        }}
-                        className="flex-1 py-1.5 px-3 bg-slate-900 border border-slate-850 rounded-lg hover:border-cyan-500/30 font-semibold text-[10px] text-slate-300 hover:text-cyan-400 transition text-left truncate flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Youtube className="h-3 w-3 shrink-0 fill-current" /> Never Gonna Give You Up
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setYoutubeUrlInput('https://www.youtube.com/watch?v=jNQXAC9IVRw');
-                          handleYoutubeImport('https://www.youtube.com/watch?v=jNQXAC9IVRw');
-                        }}
-                        className="flex-1 py-1.5 px-3 bg-slate-900 border border-slate-850 rounded-lg hover:border-cyan-500/30 font-semibold text-[10px] text-slate-300 hover:text-cyan-400 transition text-left truncate flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Youtube className="h-3 w-3 shrink-0 fill-current" /> First YouTube Video
-                      </button>
-                    </div>
-                  </div>
-
-                  {youtubeImportError && (
-                    <div className="p-3 bg-rose-950/20 border border-rose-900/30 text-rose-400 rounded-xl text-[11px] leading-relaxed">
-                      <p className="font-bold flex items-center gap-1.5"><Info className="h-3.5 w-3.5 text-rose-500 shrink-0" /> Cloud Stream Blocked / Offline Fallback</p>
-                      <p className="mt-1 text-slate-400">{youtubeImportError}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+              <p className="text-sm font-semibold text-slate-200">
+                Drag-and-Drop Video File Or Browse
+              </p>
+              <p className="text-[11px] text-slate-500 mt-2 max-w-[280px]">
+                Supported formats: MP4, WebM, QuickTime. Processed securely inside your offline sandboxed browser workspace.
+              </p>
+            </label>
           ) : (
             <div className="space-y-4">
               {/* Loaded File Info Card */}
@@ -649,14 +482,15 @@ export default function VideoSquisher() {
               </div>
 
               {/* Player Canvas Frame */}
-              <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-slate-850 flex items-center justify-center group">
+              <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-slate-850 flex items-center justify-center group select-none">
                 <video
                   ref={videoPlayerRef}
                   src={videoUrl}
                   onClick={togglePlay}
                   onTimeUpdate={handleTimeUpdate}
-                  className="max-h-full max-w-full cursor-pointer h-full object-contain"
+                  className="max-h-full max-w-full cursor-pointer h-full object-contain transition-transform duration-200"
                   style={{
+                    transform: `rotate(${videoRotation}deg)`,
                     filter: videoFilter === 'winter' ? 'contrast(1.2) saturate(0.85) hue-rotate(10deg)' : 
                             videoFilter === 'warm' ? 'contrast(1.1) sepia(40%) saturate(1.25)' : 
                             videoFilter === 'noir' ? 'grayscale(100%) contrast(1.4)' : 
@@ -903,6 +737,56 @@ export default function VideoSquisher() {
                       }`}
                     >
                       {preset === 'none' ? 'None' : preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Option: Crop Focus Area */}
+              {cropPreset !== 'none' && (
+                <div className="space-y-1.5 bg-slate-950/40 p-3 rounded-xl border border-slate-850">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Crop Focus Area</label>
+                    <span className="text-[9px] text-zinc-500 italic">Target crop priorities</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(['center', 'top', 'bottom', 'left', 'right', 'top-left', 'bottom-right'] as const).map((focus) => (
+                      <button
+                        key={focus}
+                        type="button"
+                        onClick={() => setCropFocus(focus)}
+                        className={`py-1.5 text-[10px] border rounded transition font-bold cursor-pointer capitalize text-center ${
+                          cropFocus === focus
+                            ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                            : 'bg-slate-950 border-zinc-850 text-slate-450 hover:bg-slate-900 border-slate-850 text-slate-400'
+                        }`}
+                      >
+                        {focus.replace('-', ' ')}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[9px] text-slate-500 leading-normal italic mt-1 font-medium">
+                    Prioritizes top, bottom, center, left, or right regions of the original frame during automatic cropping.
+                  </p>
+                </div>
+              )}
+
+              {/* Option: Video Rotation */}
+              <div className="space-y-1.5 bg-slate-950/40 p-3 rounded-xl border border-slate-850">
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Video Orientation (Rotate)</label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {([0, 90, 180, 270] as const).map((angle) => (
+                    <button
+                      key={angle}
+                      type="button"
+                      onClick={() => setVideoRotation(angle)}
+                      className={`py-1.5 border rounded-md transition text-[10px] font-bold cursor-pointer uppercase ${
+                        videoRotation === angle
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                          : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-400'
+                      }`}
+                    >
+                      {angle === 0 ? '0° (Orig)' : `${angle}°`}
                     </button>
                   ))}
                 </div>

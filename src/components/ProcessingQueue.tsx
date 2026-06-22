@@ -31,6 +31,7 @@ interface ProcessingQueueProps {
   files: SourceFile[];
   onSelectResultForCompare: (result: ProcessedResult) => void;
   onRenameResult: (id: string, newName: string) => void;
+  onBulkRename?: (updates: { id: string; newName: string }[]) => void;
 }
 
 export default function ProcessingQueue({
@@ -42,6 +43,7 @@ export default function ProcessingQueue({
   files,
   onSelectResultForCompare,
   onRenameResult,
+  onBulkRename,
 }: ProcessingQueueProps) {
   const [zipFolderName, setZipFolderName] = React.useState('');
   const [folderIncrementList, setFolderIncrementList] = React.useState<string[]>([]);
@@ -50,6 +52,16 @@ export default function ProcessingQueue({
   const [zipStatus, setZipStatus] = React.useState<'idle' | 'generating' | 'done'>('idle');
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editingValue, setEditingValue] = React.useState<string>('');
+
+  // Bulk Rename Settings Hooks
+  const [showBulkRename, setShowBulkRename] = React.useState(false);
+  const [bulkType, setBulkType] = React.useState<'prefix' | 'suffix' | 'replace' | 'serial'>('prefix');
+  const [bulkPrefix, setBulkPrefix] = React.useState('');
+  const [bulkSuffix, setBulkSuffix] = React.useState('');
+  const [bulkFind, setBulkFind] = React.useState('');
+  const [bulkReplace, setBulkReplace] = React.useState('');
+  const [bulkSerialPattern, setBulkSerialPattern] = React.useState('image_###');
+  const [bulkSerialStart, setBulkSerialStart] = React.useState(1);
 
   // Compute total processed files, successes, failures
   const processedCount = results.length;
@@ -193,6 +205,52 @@ export default function ProcessingQueue({
     }
   };
 
+  const applyBulkRename = () => {
+    if (!onBulkRename) return;
+
+    const updates: { id: string; newName: string }[] = [];
+
+    successes.forEach((res, index) => {
+      let currentName = res.name;
+      const lastDot = currentName.lastIndexOf('.');
+      const base = lastDot !== -1 ? currentName.substring(0, lastDot) : currentName;
+      const ext = lastDot !== -1 ? currentName.substring(lastDot) : '';
+
+      let newBase = base;
+
+      if (bulkType === 'prefix') {
+        newBase = bulkPrefix + base;
+      } else if (bulkType === 'suffix') {
+        newBase = base + bulkSuffix;
+      } else if (bulkType === 'replace') {
+        if (bulkFind) {
+          newBase = base.split(bulkFind).join(bulkReplace);
+        }
+      } else if (bulkType === 'serial') {
+        const currentNum = bulkSerialStart + index;
+        const hashes = bulkSerialPattern.match(/#+/);
+        if (hashes) {
+          const hashStr = hashes[0];
+          const paddedNum = String(currentNum).padStart(hashStr.length, '0');
+          newBase = bulkSerialPattern.replace(hashStr, paddedNum);
+        } else {
+          newBase = `${bulkSerialPattern}_${currentNum}`;
+        }
+      }
+
+      updates.push({
+        id: res.id,
+        newName: `${newBase}${ext}`
+      });
+    });
+
+    onBulkRename(updates);
+    setBulkPrefix('');
+    setBulkSuffix('');
+    setBulkFind('');
+    setBulkReplace('');
+  };
+
   return (
     <div id="processing-queue-container" className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col h-full relative">
       {/* Title */}
@@ -307,6 +365,140 @@ export default function ProcessingQueue({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Bulk Rename collapsible panel */}
+      {successes.length > 0 && !processing && (
+        <div id="bulk-rename-section" className="bg-slate-50/70 p-4 border border-gray-150 rounded-2xl space-y-3 mb-4 text-xs">
+          <button
+            onClick={() => setShowBulkRename(!showBulkRename)}
+            className="flex items-center justify-between w-full font-semibold text-gray-800 focus:outline-hidden cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-cyan-600 animate-pulse" />
+              <span>Bulk Rename Output Queue ({successes.length} items)</span>
+            </div>
+            <span className="text-[10px] text-cyan-600 select-none bg-cyan-50 px-2 py-0.5 rounded border border-cyan-150 font-bold hover:bg-cyan-100 transition duration-150">
+              {showBulkRename ? 'Hide Options' : 'Show Options'}
+            </span>
+          </button>
+
+          {showBulkRename && (
+            <div className="pt-2 border-t border-gray-200/60 grid grid-cols-1 gap-3 animate-fade-in">
+              <div>
+                <label className="text-[10px] text-gray-500 font-bold uppercase tracking-wider block mb-1.5">Renaming Method</label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {(['prefix', 'suffix', 'replace', 'serial'] as const).map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setBulkType(type)}
+                      className={`py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer capitalize text-center ${
+                        bulkType === type
+                          ? 'bg-cyan-500/10 border-cyan-500 text-cyan-700 shadow-2xs'
+                          : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Fields based on strategy */}
+              {bulkType === 'prefix' && (
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400 font-medium block">Prefix to insert (e.g., "shrunk_")</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., optimized_"
+                    value={bulkPrefix}
+                    onChange={(e) => setBulkPrefix(e.target.value)}
+                    className="w-full border border-gray-250 bg-white rounded-lg p-2 focus:outline-hidden focus:border-cyan-500 text-[11px] font-medium"
+                  />
+                </div>
+              )}
+
+              {bulkType === 'suffix' && (
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400 font-medium block">Suffix to append (e.g., "_clean")</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., _compressed"
+                    value={bulkSuffix}
+                    onChange={(e) => setBulkSuffix(e.target.value)}
+                    className="w-full border border-gray-250 bg-white rounded-lg p-2 focus:outline-hidden focus:border-cyan-500 text-[11px] font-medium"
+                  />
+                </div>
+              )}
+
+              {bulkType === 'replace' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-400 font-medium block">Find Text</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., IMG"
+                      value={bulkFind}
+                      onChange={(e) => setBulkFind(e.target.value)}
+                      className="w-full border border-gray-250 bg-white rounded-lg p-2 focus:outline-hidden focus:border-cyan-500 text-[11px] font-medium"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-400 font-medium block">Replace With</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Photo"
+                      value={bulkReplace}
+                      onChange={(e) => setBulkReplace(e.target.value)}
+                      className="w-full border border-gray-250 bg-white rounded-lg p-2 focus:outline-hidden focus:border-cyan-500 text-[11px] font-medium"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {bulkType === 'serial' && (
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2 space-y-1">
+                    <label className="text-[10px] text-gray-400 font-medium block">Pattern (use # for digits)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., beach_###"
+                      value={bulkSerialPattern}
+                      onChange={(e) => setBulkSerialPattern(e.target.value)}
+                      className="w-full border border-gray-250 bg-white rounded-lg p-2 focus:outline-hidden focus:border-cyan-500 text-[11px] font-mono font-medium"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-400 font-medium block">Start #</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={bulkSerialStart}
+                      onChange={(e) => setBulkSerialStart(parseInt(e.target.value) || 1)}
+                      className="w-full border border-gray-250 bg-white rounded-lg p-2 focus:outline-hidden focus:border-cyan-500 text-[11px] font-medium"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[10px] text-gray-400 leading-tight italic max-w-[190px]">
+                  {bulkType === 'serial'
+                    ? 'Will rename files to follow: beach_001.ext, beach_002.ext'
+                    : 'Applies to all currently processed successful runs.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={applyBulkRename}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1.5 px-3.5 rounded-lg border border-cyan-600 cursor-pointer text-[11px] h-fit shrink-0 shadow-2xs transition duration-150"
+                >
+                  Apply Rename
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
