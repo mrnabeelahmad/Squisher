@@ -1,0 +1,6 @@
+{
+  "name": "Squisher",
+  "description": "Batch offline image and video crop, resize, compress, and format converter.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      // Support assignments to window.fetch / globalThis.fetch by adding custom getters and setters
+      (function() {
+        try {
+          let currentFetch = window.fetch;
+          
+          function patch(obj, prop) {
+            try {
+              const desc = Object.getOwnPropertyDescriptor(obj, prop);
+              if (!desc || desc.configurable) {
+                Object.defineProperty(obj, prop, {
+                  get() { return currentFetch; },
+                  set(v) { currentFetch = v; },
+                  configurable: true,
+                  enumerable: true
+                });
+                return true;
+              }
+            } catch (e) {}
+            return false;
+          }
+
+          patch(Window.prototype, 'fetch');
+          patch(window, 'fetch');
+        } catch (e) {
+          console.warn('Fetch fallback patch failed:', e);
+        }
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Squisher | Batch Media Squeezer</title>
+    <link rel="icon" type="image/jpeg" href="/src/assets/images/squisher_logo_1781852280538.jpg" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
