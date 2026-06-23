@@ -14,6 +14,7 @@ import {
   ConvertStepConfig,
   CompressStepConfig,
   RotateStepConfig,
+  RemoveBgStepConfig,
 } from '../types';
 import {
   ArrowUp,
@@ -75,6 +76,18 @@ const DEFAULT_ROTATE: RotateStepConfig = {
   angle: 90,
 };
 
+const DEFAULT_REMOVE_BG: RemoveBgStepConfig = {
+  method: 'ai-dominant',
+  chromaColor: '#10b981', // emerald green chroma key defaults
+  tolerance: 30,
+  feather: 4,
+  decontaminate: true,
+  replacementType: 'transparent',
+  replaceSolidColor: '#ffffff',
+  replaceGradientStart: '#3b82f6',
+  replaceGradientEnd: '#8b5cf6',
+};
+
 export default function PipelineBuilder({
   steps,
   setSteps,
@@ -95,6 +108,7 @@ export default function PipelineBuilder({
       convertConfig: type === 'convert' ? { ...DEFAULT_CONVERT } : undefined,
       compressConfig: type === 'compress' ? { ...DEFAULT_COMPRESS } : undefined,
       rotateConfig: type === 'rotate' ? { ...DEFAULT_ROTATE } : undefined,
+      removeBgConfig: type === 'remove-bg' ? { ...DEFAULT_REMOVE_BG } : undefined,
     };
     setSteps((prev) => [...prev, newStep]);
     setActiveStepId(id);
@@ -189,6 +203,19 @@ export default function PipelineBuilder({
     );
   };
 
+  const updateRemoveBgConfig = (id: string, updates: Partial<RemoveBgStepConfig>) => {
+    setSteps((prev) =>
+      prev.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              removeBgConfig: { ...(s.removeBgConfig || DEFAULT_REMOVE_BG), ...updates },
+            }
+          : s
+      )
+    );
+  };
+
   const getStepIcon = (type: StepType) => {
     switch (type) {
       case 'crop':
@@ -201,6 +228,8 @@ export default function PipelineBuilder({
         return <FileImage className="h-5 w-5 text-emerald-500" />;
       case 'compress':
         return <Percent className="h-5 w-5 text-fuchsia-500" />;
+      case 'remove-bg':
+        return <Eye className="h-5 w-5 text-purple-400 animate-pulse" />;
     }
   };
 
@@ -216,6 +245,8 @@ export default function PipelineBuilder({
         return `Convert to ${step.convertConfig?.format.toUpperCase() || 'WEBP'}`;
       case 'compress':
         return `Compress (${step.compressConfig?.quality || 80}% Quality)`;
+      case 'remove-bg':
+        return `Background Remover (${step.removeBgConfig?.method === 'ai-dominant' ? 'AI Dominant' : step.removeBgConfig?.method === 'chroma-key' ? 'Chroma Key' : step.removeBgConfig?.method === 'border-bleed' ? 'Border Bleed' : 'Luminance'})`;
     }
   };
 
@@ -244,13 +275,14 @@ export default function PipelineBuilder({
       </div>
 
       {/* Grid of Add Step Buttons */}
-      <div id="add-step-triggers" className="grid grid-cols-5 gap-2 mb-4">
+      <div id="add-step-triggers" className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
         {[
           { type: 'crop', label: 'Crop', icon: <Crop className="h-4 w-4" />, bg: 'hover:bg-amber-955/20 text-amber-400 hover:border-amber-500/30' },
           { type: 'resize', label: 'Resize', icon: <Maximize2 className="h-4 w-4" />, bg: 'hover:bg-sky-955/20 text-sky-400 hover:border-sky-500/30' },
           { type: 'rotate', label: 'Orient', icon: <RotateCcw className="h-4 w-4 text-cyan-400" />, bg: 'hover:bg-cyan-955/20 text-cyan-400 hover:border-cyan-500/30' },
           { type: 'convert', label: 'Convert', icon: <FileImage className="h-4 w-4 animate-pulse-slow" />, bg: 'hover:bg-emerald-955/20 text-emerald-400 hover:border-emerald-500/30' },
           { type: 'compress', label: 'Compress', icon: <Percent className="h-4 w-4" />, bg: 'hover:bg-fuchsia-955/20 text-fuchsia-400 hover:border-fuchsia-500/30' },
+          { type: 'remove-bg', label: 'BG Remove', icon: <Eye className="h-4 w-4 text-purple-400" />, bg: 'hover:bg-purple-955/20 text-purple-400 hover:border-purple-500/30' },
         ].map((item) => (
           <button
             key={item.type}
@@ -272,8 +304,8 @@ export default function PipelineBuilder({
           <div className="h-full flex flex-col items-center justify-center text-center p-8 border border-dashed border-slate-800 rounded-2xl bg-slate-950/20">
             <Settings className="h-8 w-8 text-slate-705 text-slate-700 stroke-[1.5] mb-2 animate-pulse" />
             <p className="text-xs font-semibold text-slate-400">No steps in pipeline</p>
-            <p className="text-[11px] text-slate-505 mt-1 max-w-[200px] text-slate-500 font-medium">
-              Add a Crop, Resize, Rotation, Convert, or Compress step above.
+            <p className="text-[11px] text-slate-550 mt-1 max-w-[200px] text-slate-500 font-medium">
+              Add a Crop, Resize, Rotation, Convert, Compress, or BG Remover step above.
             </p>
           </div>
         ) : (
@@ -807,6 +839,237 @@ export default function PipelineBuilder({
                           <p className="text-[10px] text-slate-505 leading-normal italic mt-2 text-slate-500 font-medium">
                             Rotates the canvas coordinates relative to orientation. Rotating by 90° or 270° swaps aspect width and height.
                           </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 6. BACKGROUND REMOVAL STEP CONFIGURATION */}
+                    {step.type === 'remove-bg' && step.removeBgConfig && (
+                      <div className="space-y-4 animate-fade-in text-xs">
+                        {/* Method Selection */}
+                        <div className="space-y-1.5 font-sans">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Intelligent Keyer Method</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {[
+                              { id: 'ai-dominant', label: 'AI Dominant', desc: 'Auto-maps borders' },
+                              { id: 'chroma-key', label: 'Chroma Studio', desc: 'Studio greenscreen' },
+                              { id: 'border-bleed', label: 'Bleed Corner', desc: 'Top-left corner' },
+                              { id: 'luminance', label: 'Luminance', desc: 'Hot-spots cutout' },
+                            ].map((met) => (
+                              <button
+                                key={met.id}
+                                id={`bg-method-${met.id}`}
+                                onClick={() => updateRemoveBgConfig(step.id, { method: met.id as any })}
+                                className={`py-2 px-2.5 border rounded-lg text-left transition cursor-pointer flex flex-col gap-0.5 ${
+                                  step.removeBgConfig?.method === met.id
+                                    ? 'bg-purple-500/15 border-purple-500 text-purple-300 shadow-[0_0_12px_rgba(168,85,247,0.15)]'
+                                    : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:bg-slate-900'
+                                }`}
+                              >
+                                <span className="font-bold text-[11px] uppercase tracking-wide">{met.label}</span>
+                                <span className="text-[9px] text-slate-500 font-medium leading-tight">{met.desc}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Chroma Specific Options */}
+                        {step.removeBgConfig.method === 'chroma-key' && (
+                          <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-850 space-y-2.5 animate-fade-in">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Key Studio color</label>
+                            
+                            {/* Color presets list */}
+                            <div className="flex gap-1.5">
+                              {[
+                                { color: '#10b981', label: 'Green' },
+                                { color: '#3b82f6', label: 'Blue' },
+                                { color: '#000000', label: 'Black' },
+                                { color: '#ffffff', label: 'White' },
+                              ].map((item) => (
+                                <button
+                                  key={item.color}
+                                  id={`chroma-preset-${item.label}`}
+                                  onClick={() => updateRemoveBgConfig(step.id, { chromaColor: item.color })}
+                                  className={`flex-1 py-1 px-1 border rounded text-[10px] font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer ${
+                                    step.removeBgConfig?.chromaColor === item.color
+                                      ? 'border-purple-500 bg-purple-500/10 text-purple-400'
+                                      : 'border-slate-800 bg-slate-900 text-slate-400 hover:bg-slate-850'
+                                  }`}
+                                >
+                                  <span className="w-2.5 h-2.5 rounded-full border border-slate-700 shrink-0" style={{ backgroundColor: item.color }} />
+                                  <span className="hidden sm:inline">{item.label}</span>
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* Color Picker Input Row */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-slate-550 font-bold">Custom Eye-Dropper:</span>
+                              <input
+                                type="color"
+                                id="chroma-picker"
+                                value={step.removeBgConfig.chromaColor}
+                                onChange={(e) => updateRemoveBgConfig(step.id, { chromaColor: e.target.value })}
+                                className="w-8 h-6 bg-transparent border border-slate-800 rounded cursor-pointer animate-pulse"
+                              />
+                              <span className="text-[10px] font-mono text-purple-400 font-bold uppercase">{step.removeBgConfig.chromaColor}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Sensitivity Tolerances Controls */}
+                        <div className="space-y-3 p-3 bg-slate-950/60 rounded-xl border border-slate-850">
+                          {/* Tolerance */}
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400 font-bold">Matching Sensitivity</span>
+                              <span className="text-purple-400 font-mono font-bold">{step.removeBgConfig.tolerance}</span>
+                            </div>
+                            <input
+                              type="range"
+                              id="bg-tolerance-slider"
+                              min={5}
+                              max={120}
+                              value={step.removeBgConfig.tolerance}
+                              onChange={(e) => updateRemoveBgConfig(step.id, { tolerance: parseInt(e.target.value) })}
+                              className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            />
+                            <p className="text-[9px] text-slate-500 leading-normal font-medium">
+                              Lower values are strict, higher values match wider shade differences.
+                            </p>
+                          </div>
+
+                          {/* Edge Feather */}
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400 font-bold">Boundary Edge Feather</span>
+                              <span className="text-purple-400 font-mono font-bold">{step.removeBgConfig.feather} px</span>
+                            </div>
+                            <input
+                              type="range"
+                              id="bg-feather-slider"
+                              min={1}
+                              max={25}
+                              value={step.removeBgConfig.feather}
+                              onChange={(e) => updateRemoveBgConfig(step.id, { feather: parseInt(e.target.value) })}
+                              className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            />
+                            <p className="text-[9px] text-slate-500 leading-normal font-medium">
+                              Creates standard anti-aliased margins to smoothly blend foreground borders.
+                            </p>
+                          </div>
+
+                          {/* Fringe Decontamination */}
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-900">
+                            <div className="flex flex-col gap-0.5 max-w-[80%]">
+                              <span className="text-slate-300 font-bold text-[11px]">Edge Decontamination</span>
+                              <span className="text-[9px] text-slate-500 leading-snug font-medium">Reconstructs colors along transparent fringe borders to sweep away outline halos.</span>
+                            </div>
+                            <button
+                              id="bg-decontaminate-toggle"
+                              type="button"
+                              onClick={() => updateRemoveBgConfig(step.id, { decontaminate: !step.removeBgConfig?.decontaminate })}
+                              className={`w-9 h-5 rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-hidden ${
+                                step.removeBgConfig.decontaminate ? 'bg-purple-500' : 'bg-slate-800'
+                              }`}
+                            >
+                              <div className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-200 ${
+                                step.removeBgConfig.decontaminate ? 'translate-x-4' : 'translate-x-0'
+                              }`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Background Replacements Panel */}
+                        <div className="space-y-2.5 p-3 bg-slate-950/60 rounded-xl border border-slate-850">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Backdrop Replacement</label>
+                          <div className="grid grid-cols-3 gap-1">
+                            {[
+                              { id: 'transparent', label: 'Transparent' },
+                              { id: 'solid', label: 'Solid Color' },
+                              { id: 'gradient', label: 'AI Gradient' },
+                            ].map((rep) => (
+                              <button
+                                key={rep.id}
+                                id={`bg-replace-${rep.id}`}
+                                type="button"
+                                onClick={() => updateRemoveBgConfig(step.id, { replacementType: rep.id as any })}
+                                className={`py-1.5 px-2 border rounded-md font-bold text-[10px] uppercase text-center tracking-wider transition cursor-pointer ${
+                                  step.removeBgConfig?.replacementType === rep.id
+                                    ? 'bg-purple-500/15 border-purple-500 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.15)]'
+                                    : 'bg-slate-950/40 border-slate-900 text-slate-400 hover:bg-slate-900'
+                                }`}
+                              >
+                                {rep.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Solid Replacement Panel */}
+                          {step.removeBgConfig.replacementType === 'solid' && (
+                            <div className="flex items-center gap-2 bg-slate-950 p-2 rounded-lg border border-slate-900 animate-slide-up">
+                              <span className="text-[10px] text-slate-500 font-bold">Pick backdrop shade:</span>
+                              <input
+                                type="color"
+                                id="backdrop-solidpicker"
+                                value={step.removeBgConfig.replaceSolidColor}
+                                onChange={(e) => updateRemoveBgConfig(step.id, { replaceSolidColor: e.target.value })}
+                                className="w-8 h-6 bg-transparent border border-slate-850 rounded cursor-pointer"
+                              />
+                              <span className="font-mono text-[10.5px] text-purple-400 font-bold uppercase">{step.removeBgConfig.replaceSolidColor}</span>
+                            </div>
+                          )}
+
+                          {/* Gradient Replacement Panel */}
+                          {step.removeBgConfig.replacementType === 'gradient' && (
+                            <div className="space-y-2.5 bg-slate-950 p-2.5 rounded-lg border border-slate-900 animate-slide-up">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] text-slate-450 font-bold">Preset gradient nodes:</span>
+                                <div className="flex gap-1" id="presets-gradient-row">
+                                  {[
+                                    { s: '#fbbf24', e: '#f59e0b' }, // Gold Honey
+                                    { s: '#ec4899', e: '#8b5cf6' }, // Sunset Pink
+                                    { s: '#3b82f6', e: '#1d4ed8' }, // Cobalt Deep
+                                    { s: '#06b6d4', e: '#10b981' }, // Emerald Ice
+                                  ].map((nd, ind) => (
+                                    <button
+                                      key={ind}
+                                      id={`gradient-preset-${ind}`}
+                                      type="button"
+                                      onClick={() => updateRemoveBgConfig(step.id, { replaceGradientStart: nd.s, replaceGradientEnd: nd.e })}
+                                      className="w-4 h-4 rounded-full border border-slate-800 transition transform hover:scale-110 cursor-pointer overflow-hidden flex"
+                                    >
+                                      <div className="w-1/2 h-full" style={{ backgroundColor: nd.s }} />
+                                      <div className="w-1/2 h-full" style={{ backgroundColor: nd.e }} />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] text-slate-500 font-medium">Start:</span>
+                                  <input
+                                    type="color"
+                                    id="backdrop-gradstart"
+                                    value={step.removeBgConfig.replaceGradientStart}
+                                    onChange={(e) => updateRemoveBgConfig(step.id, { replaceGradientStart: e.target.value })}
+                                    className="w-6 h-5 bg-transparent border border-slate-850 rounded cursor-pointer"
+                                  />
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] text-slate-500 font-medium">End:</span>
+                                  <input
+                                    type="color"
+                                    id="backdrop-gradend"
+                                    value={step.removeBgConfig.replaceGradientEnd}
+                                    onChange={(e) => updateRemoveBgConfig(step.id, { replaceGradientEnd: e.target.value })}
+                                    className="w-6 h-5 bg-transparent border border-slate-850 rounded cursor-pointer"
+                                  />
+                                </div>
+                                <div className="h-4 w-12 rounded border border-slate-850 ml-auto shrink-0 animate-pulse" style={{ background: `linear-gradient(135deg, ${step.removeBgConfig.replaceGradientStart}, ${step.removeBgConfig.replaceGradientEnd})` }} />
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}

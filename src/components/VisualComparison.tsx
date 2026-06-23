@@ -157,7 +157,7 @@ export default function VisualComparison({
                   src={originalFile.originalUrl}
                   alt="original preview"
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-contain bg-gray-900"
+                  className="w-full h-full object-contain checkerboard-bg"
                 />
                 <div className="absolute top-3 left-3 bg-gray-900/80 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-1 rounded-md border border-gray-700/50">
                   Original (100% Quality Elements)
@@ -181,7 +181,7 @@ export default function VisualComparison({
                       src={result.processedUrl}
                       alt="processed preview"
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-contain bg-gray-900"
+                      className="w-full h-full object-contain checkerboard-bg"
                     />
                   )}
                 </div>
