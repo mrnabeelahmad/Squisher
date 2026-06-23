@@ -16,22 +16,10 @@ export type CropAnchor =
   | 'bottom'
   | 'bottom-right';
 
-export type StepType = 'crop' | 'resize' | 'convert' | 'compress' | 'rotate' | 'remove-bg';
+export type StepType = 'crop' | 'resize' | 'convert' | 'compress' | 'rotate';
 
 export interface RotateStepConfig {
   angle: 90 | 180 | 270;
-}
-
-export interface RemoveBgStepConfig {
-  method: 'ai-dominant' | 'chroma-key' | 'border-bleed' | 'luminance';
-  chromaColor: string; // custom color like '#00ff00' for keyer
-  tolerance: number; // 0 to 120 (higher tolerance picks up wider gamut shade offsets)
-  feather: number; // 0 to 20px of soft alpha feathering
-  decontaminate: boolean; // Fringe removal
-  replacementType: 'transparent' | 'solid' | 'gradient';
-  replaceSolidColor: string;
-  replaceGradientStart: string;
-  replaceGradientEnd: string;
 }
 
 export interface CropStepConfig {
@@ -74,7 +62,6 @@ export interface PipelineStep {
   convertConfig?: ConvertStepConfig;
   compressConfig?: CompressStepConfig;
   rotateConfig?: RotateStepConfig;
-  removeBgConfig?: RemoveBgStepConfig;
 }
 
 export interface SourceFile {

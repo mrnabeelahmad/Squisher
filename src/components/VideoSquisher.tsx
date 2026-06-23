@@ -18,7 +18,9 @@ import {
   Volume2,
   FileVideo,
   ChevronDown,
-  Share2
+  Share2,
+  Crop,
+  RotateCcw
 } from 'lucide-react';
 
 interface CompressedVideo {
@@ -86,6 +88,44 @@ export default function VideoSquisher() {
 
   // History States
   const [processedVideos, setProcessedVideos] = useState<CompressedVideo[]>([]);
+
+  // Pipeline Step State
+  const [pipelineSteps, setPipelineSteps] = useState<string[]>(['trim', 'crop', 'format']);
+  const [enabledSteps, setEnabledSteps] = useState<string[]>(['trim', 'crop', 'format']);
+  const [activeStepId, setActiveStepId] = useState<string | null>('trim');
+
+  const handleResetAllVideo = () => {
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    processedVideos.forEach(v => URL.revokeObjectURL(v.url));
+
+    setVideoFile(null);
+    setVideoUrl('');
+    setIsLoadingFile(false);
+    setVideoMeta(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setCropPreset('none');
+    setResolutionScale(0.75);
+    setVideoBitrate(2.5);
+    setTargetFps(30);
+    setStripAudio(false);
+    setOutputFormat('webm');
+    setVideoRotation(0);
+    setCropFocus('center');
+    setOverlayText('');
+    setOverlayColor('#22d3ee');
+    setOverlaySize(24);
+    setOverlayPos('bottom');
+    setVideoFilter('normal');
+    setProcessedVideos([]);
+
+    // Reset pipeline state
+    setPipelineSteps(['trim', 'crop', 'format']);
+    setEnabledSteps(['trim', 'crop', 'format']);
+    setActiveStepId('trim');
+  };
 
   // Cleanup object URLs on unmount
   useEffect(() => {
@@ -258,13 +298,36 @@ export default function VideoSquisher() {
     setProcessStatus('Uploading media file to server compression queue...');
 
     try {
+      const isTrimEnabled = enabledSteps.includes('trim');
+      const isCropEnabled = enabledSteps.includes('crop');
+      const isRotateEnabled = enabledSteps.includes('rotate');
+      const isWatermarkEnabled = enabledSteps.includes('watermark');
+      const isFilterEnabled = enabledSteps.includes('filter');
+      const isFormatEnabled = enabledSteps.includes('format');
+
+      const finalRotation = isRotateEnabled ? videoRotation : 0;
+      const finalCropPreset = isCropEnabled ? cropPreset : 'none';
+      const finalCropFocus = isCropEnabled ? cropFocus : 'center';
+      const finalResolutionScale = isCropEnabled ? resolutionScale : 1.0;
+
+      const finalTrimStart = isTrimEnabled ? trimStart : 0;
+      const finalTrimEnd = isTrimEnabled && trimEnd > trimStart ? trimEnd : videoMeta.duration;
+
+      const finalOverlayText = isWatermarkEnabled ? overlayText : '';
+      const finalVideoFilter = isFilterEnabled ? videoFilter : 'normal';
+
+      const finalFormat = isFormatEnabled ? outputFormat : 'mp4';
+      const finalBitrate = isFormatEnabled ? videoBitrate : 2.5;
+      const finalFps = isFormatEnabled ? targetFps : 30;
+      const finalStripAudio = isFormatEnabled ? stripAudio : false;
+
       // 1. Resolve output coordinates & crops
       let origWidth = videoMeta.width;
       let origHeight = videoMeta.height;
 
       // When rotating 90 or 270, the ffmpeg transpose runs first, swapping raw bounds.
       // So crop dimensions must refer to the swapped dimensions!
-      if (videoRotation === 90 || videoRotation === 270) {
+      if (finalRotation === 90 || finalRotation === 270) {
         origWidth = videoMeta.height;
         origHeight = videoMeta.width;
       }
@@ -273,11 +336,11 @@ export default function VideoSquisher() {
       let cropWidth = origWidth;
       let cropHeight = origHeight;
 
-      if (cropPreset === '1:1') {
+      if (finalCropPreset === '1:1') {
         const side = Math.min(origWidth, origHeight);
         cropWidth = side;
         cropHeight = side;
-      } else if (cropPreset === '16:9') {
+      } else if (finalCropPreset === '16:9') {
         // Landscape
         const targetHeight = Math.round((origWidth * 9) / 16);
         if (targetHeight <= origHeight) {
@@ -286,7 +349,7 @@ export default function VideoSquisher() {
           const targetWidth = Math.round((origHeight * 16) / 9);
           cropWidth = targetWidth;
         }
-      } else if (cropPreset === '9:16') {
+      } else if (finalCropPreset === '9:16') {
         // Portrait / TikTok format
         const targetWidth = Math.round((origHeight * 9) / 16);
         if (targetWidth <= origWidth) {
@@ -295,7 +358,7 @@ export default function VideoSquisher() {
           const targetHeight = Math.round((origWidth * 16) / 9);
           cropHeight = targetHeight;
         }
-      } else if (cropPreset === '4:3') {
+      } else if (finalCropPreset === '4:3') {
         // Academy ratio
         const targetWidth = Math.round((origHeight * 4) / 3);
         if (targetWidth <= origWidth) {
@@ -310,25 +373,25 @@ export default function VideoSquisher() {
       let cropX = Math.round((origWidth - cropWidth) / 2);
       let cropY = Math.round((origHeight - cropHeight) / 2);
 
-      if (cropFocus === 'top') {
+      if (finalCropFocus === 'top') {
         cropY = 0;
-      } else if (cropFocus === 'bottom') {
+      } else if (finalCropFocus === 'bottom') {
         cropY = Math.max(0, origHeight - cropHeight);
-      } else if (cropFocus === 'left') {
+      } else if (finalCropFocus === 'left') {
         cropX = 0;
-      } else if (cropFocus === 'right') {
+      } else if (finalCropFocus === 'right') {
         cropX = Math.max(0, origWidth - cropWidth);
-      } else if (cropFocus === 'top-left') {
+      } else if (finalCropFocus === 'top-left') {
         cropX = 0;
         cropY = 0;
-      } else if (cropFocus === 'bottom-right') {
+      } else if (finalCropFocus === 'bottom-right') {
         cropX = Math.max(0, origWidth - cropWidth);
         cropY = Math.max(0, origHeight - cropHeight);
       }
 
       // Apply proportional scale down-scale (pixel reduction!)
-      const destWidth = Math.round((cropWidth * resolutionScale) / 2) * 2; // Even coordinates for standard H264
-      const destHeight = Math.round((cropHeight * resolutionScale) / 2) * 2;
+      const destWidth = Math.round((cropWidth * finalResolutionScale) / 2) * 2; // Even coordinates for standard H264
+      const destHeight = Math.round((cropHeight * finalResolutionScale) / 2) * 2;
 
       setProcessingProgress(35);
       setProcessStatus('Transcoding cinematic video server-side...');
@@ -336,27 +399,27 @@ export default function VideoSquisher() {
       // Prepare FormData payload for upload
       const formData = new FormData();
       formData.append('video', videoFile);
-      formData.append('cropPreset', cropPreset);
-      formData.append('resolutionScale', String(resolutionScale));
-      formData.append('videoBitrate', String(videoBitrate));
-      formData.append('targetFps', String(targetFps));
-      formData.append('stripAudio', String(stripAudio));
-      formData.append('outputFormat', outputFormat);
-      formData.append('overlayText', overlayText);
+      formData.append('cropPreset', finalCropPreset);
+      formData.append('resolutionScale', String(finalResolutionScale));
+      formData.append('videoBitrate', String(finalBitrate));
+      formData.append('targetFps', String(finalFps));
+      formData.append('stripAudio', String(finalStripAudio));
+      formData.append('outputFormat', finalFormat);
+      formData.append('overlayText', finalOverlayText);
       formData.append('overlayColor', overlayColor);
       formData.append('overlaySize', String(overlaySize));
       formData.append('overlayPos', overlayPos);
-      formData.append('videoFilter', videoFilter);
-      formData.append('trimStart', String(trimStart));
-      formData.append('trimEnd', String(trimEnd));
+      formData.append('videoFilter', finalVideoFilter);
+      formData.append('trimStart', String(finalTrimStart));
+      formData.append('trimEnd', String(finalTrimEnd));
       formData.append('cropWidth', String(cropWidth));
       formData.append('cropHeight', String(cropHeight));
       formData.append('cropX', String(cropX));
       formData.append('cropY', String(cropY));
       formData.append('destWidth', String(destWidth));
       formData.append('destHeight', String(destHeight));
-      formData.append('videoRotation', String(videoRotation));
-      formData.append('cropFocus', cropFocus);
+      formData.append('videoRotation', String(finalRotation));
+      formData.append('cropFocus', finalCropFocus);
 
       const response = await fetch('/api/process-video', {
         method: 'POST',
@@ -376,18 +439,18 @@ export default function VideoSquisher() {
         throw new Error(result.error || 'Server transcoding rejected pipeline parameters.');
       }
 
-      const totalDuration = trimEnd - trimStart;
+      const totalDuration = finalTrimEnd - finalTrimStart;
 
       const newRes: CompressedVideo = {
         id: result.id || `vid_${Date.now()}`,
-        name: result.filename || `squished_${videoFile.name.substring(0, videoFile.name.lastIndexOf('.')) || 'video'}.${outputFormat}`,
+        name: result.filename || `squished_${videoFile.name.substring(0, videoFile.name.lastIndexOf('.')) || 'video'}.${finalFormat}`,
         originalSize: result.originalSize || videoFile.size || 15 * 1024 * 1024,
         processedSize: result.processedSize,
         url: result.url,
         duration: totalDuration,
         width: result.width || destWidth,
         height: result.height || destHeight,
-        filters: videoFilter === 'normal' ? 'Original' : videoFilter.toUpperCase(),
+        filters: finalVideoFilter === 'normal' ? 'Original' : finalVideoFilter.toUpperCase(),
         textOverlay: overlayText ? `"${overlayText}"` : 'None',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       };
@@ -686,293 +749,529 @@ export default function VideoSquisher() {
       <section className="xl:col-span-5 flex flex-col gap-6">
         <div id="video-settings-card" className="p-6 rounded-2xl bg-slate-900/50 backdrop-blur-md border border-slate-800/80 shadow-lg flex flex-col h-full justify-between">
           <div>
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider mb-5 flex items-center gap-1.5 border-b border-slate-800 pb-3">
-              <Sliders className="h-4 w-4 text-cyan-400" />
-              Squish Configurator
-            </h3>
-
-            <div className="space-y-4 text-xs">
-              {/* Option: Format Converter */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Target Export Format</label>
-                  <span className="text-[9px] text-slate-500 italic">WebM/VP9 is recommended offline</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-lg border border-slate-850">
-                  <button
-                    onClick={() => setOutputFormat('webm')}
-                    className={`py-1.5 rounded-md font-bold text-center text-[11px] uppercase transition cursor-pointer ${
-                      outputFormat === 'webm'
-                        ? 'bg-slate-800 text-cyan-400 py-2'
-                        : 'text-slate-450 text-slate-500 hover:text-slate-300'
-                    }`}
-                  >
-                    webm (VP9 Lossless)
-                  </button>
-                  <button
-                    onClick={() => setOutputFormat('mp4')}
-                    className={`py-1.5 rounded-md font-bold text-center text-[11px] uppercase transition cursor-pointer ${
-                      outputFormat === 'mp4'
-                        ? 'bg-slate-800 text-cyan-400 py-2'
-                        : 'text-slate-450 text-slate-500 hover:text-slate-300'
-                    }`}
-                  >
-                    mp4 (H264 Base)
-                  </button>
-                </div>
+            <div className="flex items-center justify-between mb-5 border-b border-slate-800 pb-3 font-sans">
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <Sliders className="h-4 w-4 text-cyan-400" />
+                  Video Pipeline
+                </h3>
+                <p className="text-[10px] text-zinc-500 mt-0.5 font-medium">Configure video processing nodes in sequence</p>
               </div>
-
-              {/* Option: Cropping Preset */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Compress Crop Layout</label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {(['none', '1:1', '16:9', '9:16', '4:3'] as const).map((preset) => (
-                    <button
-                      key={preset}
-                      onClick={() => setCropPreset(preset)}
-                      className={`py-1.5 border rounded-md transition text-[10px] font-bold cursor-pointer uppercase ${
-                        cropPreset === preset
-                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
-                          : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-450 text-slate-400'
-                      }`}
-                    >
-                      {preset === 'none' ? 'None' : preset}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Option: Crop Focus Area */}
-              {cropPreset !== 'none' && (
-                <div className="space-y-1.5 bg-slate-950/40 p-3 rounded-xl border border-slate-850">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Crop Focus Area</label>
-                    <span className="text-[9px] text-zinc-500 italic">Target crop priorities</span>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {(['center', 'top', 'bottom', 'left', 'right', 'top-left', 'bottom-right'] as const).map((focus) => (
-                      <button
-                        key={focus}
-                        type="button"
-                        onClick={() => setCropFocus(focus)}
-                        className={`py-1.5 text-[10px] border rounded transition font-bold cursor-pointer capitalize text-center ${
-                          cropFocus === focus
-                            ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
-                            : 'bg-slate-950 border-zinc-850 text-slate-450 hover:bg-slate-900 border-slate-850 text-slate-400'
-                        }`}
-                      >
-                        {focus.replace('-', ' ')}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[9px] text-slate-500 leading-normal italic mt-1 font-medium">
-                    Prioritizes top, bottom, center, left, or right regions of the original frame during automatic cropping.
-                  </p>
-                </div>
-              )}
-
-              {/* Option: Video Rotation */}
-              <div className="space-y-1.5 bg-slate-950/40 p-3 rounded-xl border border-slate-850">
-                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Video Orientation (Rotate)</label>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {([0, 90, 180, 270] as const).map((angle) => (
-                    <button
-                      key={angle}
-                      type="button"
-                      onClick={() => setVideoRotation(angle)}
-                      className={`py-1.5 border rounded-md transition text-[10px] font-bold cursor-pointer uppercase ${
-                        videoRotation === angle
-                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
-                          : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-400'
-                      }`}
-                    >
-                      {angle === 0 ? '0° (Orig)' : `${angle}°`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Option: Down-Scale (Pixel reduction!) */}
-              <div className="space-y-2 bg-slate-950/40 p-3 rounded-xl border border-slate-850">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] text-slate-450 text-slate-400 font-bold uppercase tracking-wider block">Resolution Downscaling</label>
-                  <span className="text-[11px] font-mono font-bold text-cyan-400">
-                    {resolutionScale === 1.0 ? 'Original (100%)' : `-${(1.0 - resolutionScale) * 100}% (${resolutionScale * 100}%)`}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  {[0.25, 0.5, 0.75, 1.0].map((scale) => (
-                    <button
-                      key={scale}
-                      onClick={() => setResolutionScale(scale)}
-                      className={`flex-1 py-1 border rounded font-semibold text-[10px] transition cursor-pointer ${
-                        resolutionScale === scale
-                          ? 'bg-cyan-500/10 border-cyan-400/50 text-cyan-400'
-                          : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-500'
-                      }`}
-                    >
-                      {scale * 100}%
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Option: Bitrate / Compression factor */}
-              <div className="space-y-2 bg-slate-950/40 p-3 rounded-xl border border-slate-850">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] text-slate-450 text-slate-400 font-bold uppercase tracking-wider">Target Video Bitrate (Squeezing)</label>
-                  <span className="text-xs font-mono font-extrabold text-cyan-400">{videoBitrate} Mbps</span>
-                </div>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={12}
-                  step={0.5}
-                  value={videoBitrate}
-                  onChange={(e) => setVideoBitrate(parseFloat(e.target.value))}
-                  className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                />
-                <div className="flex justify-between text-[9px] text-slate-600 font-mono">
-                  <span>0.5 Mbps (Hyper-compressed)</span>
-                  <span>12 Mbps (High HD)</span>
-                </div>
-              </div>
-
-              {/* Option: Frame-rate and Audio stripping */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-850 space-y-1.5">
-                  <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Target Rate (FPS)</label>
-                  <div className="flex gap-1.5">
-                    {[15, 24, 30].map((fps) => (
-                      <button
-                        key={fps}
-                        onClick={() => setTargetFps(fps)}
-                        className={`flex-1 py-1 border rounded text-[10px] font-bold transition cursor-pointer ${
-                          targetFps === fps
-                            ? 'bg-cyan-505/20 border-cyan-500 text-cyan-400'
-                            : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-500'
-                        }`}
-                      >
-                        {fps}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
+              
+              <div className="flex gap-1.5 items-center">
                 <button
-                  onClick={() => setStripAudio(!stripAudio)}
-                  className={`flex items-center gap-2 justify-center border p-3 rounded-xl transition cursor-pointer text-[11px] font-bold ${
-                    stripAudio
-                      ? 'bg-rose-950/20 border-rose-500/30 text-rose-400 shadow-sm'
-                      : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-400'
-                  }`}
+                  type="button"
+                  onClick={handleResetAllVideo}
+                  className="text-[9.5px] font-bold text-rose-400 hover:text-rose-300 transition bg-rose-955/20 hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-900/40 cursor-pointer flex items-center gap-1"
+                  title="Reset all sources, steps, results"
                 >
-                  {stripAudio ? (
-                    <>
-                      <VolumeX className="h-4 w-4" /> Muted (No Audio)
-                    </>
-                  ) : (
-                    <>
-                      <Volume2 className="h-4 w-4 text-cyan-400" /> Keep Audio Track
-                    </>
-                  )}
+                  <RotateCcw className="h-3 w-3" />
+                  Reset Tool
                 </button>
-              </div>
-
-              {/* Option: Custom Watermark Overlay */}
-              <div className="bg-slate-950/40 p-3.5 rounded-xl border border-slate-850 space-y-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-[10px] text-slate-450 text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                    <Type className="h-3.5 w-3.5 text-cyan-400" />
-                    Overlay Text Watermark
-                  </label>
-                  {overlayText && (
-                    <button 
-                      onClick={() => setOverlayText('')}
-                      className="text-[9px] font-bold text-rose-400 hover:underline cursor-pointer"
-                    >
-                      Clear Text
-                    </button>
-                  )}
-                </div>
-                
-                <input
-                  type="text"
-                  placeholder="Enter watermark overlay text..."
-                  value={overlayText}
-                  onChange={(e) => setOverlayText(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs focus:outline-hidden focus:border-cyan-400"
-                />
-
-                {overlayText && (
-                  <div className="grid grid-cols-3 gap-2 pt-1 animate-fade-in text-[10px]">
-                    <div>
-                      <span className="text-[9px] text-slate-500 block mb-1">POSITION</span>
-                      <select
-                        value={overlayPos}
-                        onChange={(e: any) => setOverlayPos(e.target.value)}
-                        className="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded font-bold text-slate-350 cursor-pointer focus:outline-hidden text-[10px]"
-                      >
-                        <option value="top">Top Center</option>
-                        <option value="center">Center</option>
-                        <option value="bottom">Bottom Center</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <span className="text-[9px] text-slate-500 block mb-1">COLOR</span>
-                      <select
-                        value={overlayColor}
-                        onChange={(e) => setOverlayColor(e.target.value)}
-                        className="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded font-bold text-slate-350 cursor-pointer focus:outline-hidden text-[10px]"
-                      >
-                        <option value="#22d3ee">Cyan</option>
-                        <option value="#ffffff">White</option>
-                        <option value="#facc15">Yellow</option>
-                        <option value="#ec4899">Magenta</option>
-                        <option value="#000000">Black</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <span className="text-[9px] text-slate-500 block mb-1">FONT SIZE ({overlaySize}px)</span>
-                      <input
-                        type="range"
-                        min={12}
-                        max={42}
-                        value={overlaySize}
-                        onChange={(e) => setOverlaySize(parseInt(e.target.value))}
-                        className="w-full h-1 mt-2.5 cursor-pointer accent-cyan-400 appearance-none bg-slate-800"
-                      />
-                    </div>
-                  </div>
+                {pipelineSteps.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPipelineSteps([]);
+                      setEnabledSteps([]);
+                      setActiveStepId(null);
+                    }}
+                    className="text-[9.5px] font-semibold text-slate-400 hover:text-white transition flex items-center gap-1 bg-slate-950 hover:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-800 cursor-pointer"
+                    title="Remove all steps from the pipeline list"
+                  >
+                    Clear Steps
+                  </button>
                 )}
               </div>
-
-              {/* Option: Contrast Theme/Presets */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Contrast Presets / Filters</label>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {(['normal', 'winter', 'warm', 'noir', 'bw', 'cinema', 'cyberpunk'] as const).map((filter) => (
-                    <button
-                      key={filter}
-                      onClick={() => setVideoFilter(filter)}
-                      className={`py-1.5 px-1 rounded-lg border text-[10px] font-bold transition capitalize cursor-pointer ${
-                        videoFilter === filter
-                          ? 'bg-slate-800 text-cyan-400 border-cyan-500'
-                          : 'bg-slate-950/40 border-slate-850 hover:bg-slate-900 text-slate-450 hover:text-slate-300'
-                      }`}
-                    >
-                      {filter === 'normal' ? 'Original' : filter === 'bw' ? 'B&W' : filter}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
+
+            {/* Video Step Grid of Add Buttons */}
+            <div id="video-add-triggers" className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4 font-sans">
+              {[
+                { id: 'trim', label: 'Trim', icon: <Scissors className="h-4 w-4 text-amber-400" />, bg: 'hover:bg-amber-955/20 text-amber-400 hover:border-amber-500/30' },
+                { id: 'crop', label: 'Crop', icon: <Crop className="h-4 w-4 text-sky-400" />, bg: 'hover:bg-sky-955/20 text-sky-400 hover:border-sky-500/30' },
+                { id: 'format', label: 'Format', icon: <Sliders className="h-4 w-4 text-fuchsia-400" />, bg: 'hover:bg-fuchsia-955/20 text-fuchsia-400 hover:border-fuchsia-500/30' },
+                { id: 'rotate', label: 'Rotate', icon: <RefreshCw className="h-4 w-4 text-cyan-400" />, bg: 'hover:bg-cyan-955/20 text-cyan-400 hover:border-cyan-500/30' },
+                { id: 'watermark', label: 'Watermark', icon: <Type className="h-4 w-4 text-purple-400" />, bg: 'hover:bg-purple-955/20 text-purple-400 hover:border-purple-500/30' },
+                { id: 'filter', label: 'Filter', icon: <Sparkles className="h-4 w-4 text-pink-400" />, bg: 'hover:bg-pink-955/20 text-pink-400 hover:border-pink-500/30' },
+              ].map((item) => {
+                const isAdded = pipelineSteps.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    id={`video-add-${item.id}`}
+                    onClick={() => {
+                      if (!pipelineSteps.includes(item.id)) {
+                        setPipelineSteps(prev => [...prev, item.id]);
+                        setEnabledSteps(prev => [...prev, item.id]);
+                      }
+                      setActiveStepId(item.id);
+                    }}
+                    className={`flex flex-col items-center justify-center py-2 px-1 border border-dashed rounded-xl bg-slate-950/40 hover:bg-slate-900/85 text-[10px] font-semibold transition cursor-pointer gap-1.5 ${
+                      isAdded 
+                        ? 'border-cyan-500/50 text-cyan-400 bg-cyan-950/20' 
+                        : 'border-slate-800 text-slate-400'
+                    } ${item.bg}`}
+                  >
+                    <div className="p-1 rounded-full bg-slate-900 shadow-xs border border-slate-800">
+                      {item.icon}
+                    </div>
+                    <span>{item.label}</span>
+                    {isAdded && (
+                      <span className="text-[7.5px] bg-cyan-400/25 text-cyan-400 px-1 rounded-full uppercase scale-90 font-extrabold tracking-wider mt-0.5">Active</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {pipelineSteps.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-center p-8 border border-dashed border-slate-800/60 rounded-2xl bg-slate-950/20 py-12 font-sans">
+                <Sliders className="h-8 w-8 text-slate-700 stroke-[1.5] mb-2 animate-pulse" />
+                <p className="text-xs font-semibold text-slate-400">No active steps in video pipeline</p>
+                <p className="text-[11px] text-slate-500 mt-1 max-w-[200px] leading-normal font-medium">
+                  Add a Trim, Crop, Format, Rotate, Watermark, or Filter segment from the grid above to start configuring!
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 text-xs">
+                {[
+                  { 
+                    id: 'trim', 
+                  title: 'Trim Timeline', 
+                  icon: <Scissors className="h-3.5 w-3.5 text-amber-500" />,
+                  desc: 'Cut video segment duration',
+                  badge: `${trimStart.toFixed(1)}s – ${trimEnd > 0 ? trimEnd.toFixed(1) : (videoMeta ? videoMeta.duration.toFixed(1) : '0.0')}s`,
+                  content: (
+                    <div className="space-y-3 pt-2 border-t border-slate-800/50 mt-1">
+                      <p className="text-[10px] text-slate-500 leading-normal font-sans">
+                        Select start and end clip boundaries.
+                      </p>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[9px] text-slate-500 font-bold block mb-1">TRIM START (SECONDS)</label>
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0}
+                            max={trimEnd > 0 ? trimEnd - 0.1 : 100}
+                            value={trimStart}
+                            onChange={(e) => {
+                              const val = Math.max(0, parseFloat(e.target.value) || 0);
+                              if (!videoMeta || val < trimEnd) setTrimStart(val);
+                            }}
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-slate-500 font-bold block mb-1">TRIM END (SECONDS)</label>
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={trimStart + 0.1}
+                            max={videoMeta ? videoMeta.duration : 100}
+                            value={trimEnd}
+                            onChange={(e) => {
+                              if (!videoMeta) return;
+                              const val = Math.min(videoMeta.duration, parseFloat(e.target.value) || videoMeta.duration);
+                              if (val > trimStart) setTrimEnd(val);
+                            }}
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                },
+                { 
+                  id: 'crop', 
+                  title: 'Crop & Rescale', 
+                  icon: <Crop className="h-3.5 w-3.5 text-sky-500" />,
+                  desc: 'Aspect ratio and output scale',
+                  badge: cropPreset === 'none' ? `${resolutionScale * 100}% scale` : `${cropPreset} (${resolutionScale * 100}%)`,
+                  content: (
+                    <div className="space-y-3 pt-2 border-t border-slate-800/50 mt-1">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Compress Crop Layout</label>
+                        <div className="grid grid-cols-5 gap-1.5 font-sans">
+                          {(['none', '1:1', '16:9', '9:16', '4:3'] as const).map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => setCropPreset(preset)}
+                              className={`py-1 border rounded-md transition text-[10px] font-bold cursor-pointer uppercase ${
+                                cropPreset === preset
+                                  ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                                  : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-400'
+                              }`}
+                            >
+                              {preset === 'none' ? 'None' : preset}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {cropPreset !== 'none' && (
+                        <div className="space-y-1.5 bg-slate-950/40 p-2.5 rounded-lg border border-slate-850 animate-fade-in font-sans">
+                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Crop Focus Alignment</label>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            {(['center', 'top', 'bottom', 'left', 'right', 'top-left', 'bottom-right'] as const).map((focus) => (
+                              <button
+                                key={focus}
+                                type="button"
+                                onClick={() => setCropFocus(focus)}
+                                className={`py-1 text-[9px] border rounded transition font-bold cursor-pointer capitalize text-center ${
+                                  cropFocus === focus
+                                    ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                                    : 'bg-slate-950 border-slate-850 text-slate-400 hover:bg-slate-900'
+                                }`}
+                              >
+                                {focus.replace('-', ' ')}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="space-y-2">
+                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Resolution Downscaling</label>
+                        <div className="flex items-center gap-2 font-sans">
+                          {[0.25, 0.5, 0.75, 1.0].map((scale) => (
+                            <button
+                              key={scale}
+                              type="button"
+                              onClick={() => setResolutionScale(scale)}
+                              className={`flex-1 py-1 px-1.5 border rounded font-semibold text-[10px] transition cursor-pointer text-center ${
+                                resolutionScale === scale
+                                  ? 'bg-cyan-500/10 border-cyan-400 text-cyan-400'
+                                  : 'bg-slate-955 bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-500'
+                              }`}
+                            >
+                              {scale * 100}%
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                },
+                { 
+                  id: 'format', 
+                  title: 'Format & Squeezing', 
+                  icon: <Sliders className="h-3.5 w-3.5 text-fuchsia-500" />,
+                  desc: 'Codecs, bitrates, frame rates',
+                  badge: `${outputFormat.toUpperCase()} – ${videoBitrate} Mbps – ${targetFps}fps`,
+                  content: (
+                    <div className="space-y-3 pt-2 border-t border-slate-800/50 mt-1">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Target Export Format</label>
+                        <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-lg border border-slate-850 font-sans">
+                          <button
+                            type="button"
+                            onClick={() => setOutputFormat('webm')}
+                            className={`py-1 rounded-md font-bold text-center text-[10px] uppercase transition cursor-pointer ${
+                              outputFormat === 'webm'
+                                ? 'bg-slate-800 text-cyan-400 py-1'
+                                : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                          >
+                            webm (VP9 Lossless)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOutputFormat('mp4')}
+                            className={`py-1 rounded-md font-bold text-center text-[10px] uppercase transition cursor-pointer ${
+                              outputFormat === 'mp4'
+                                ? 'bg-slate-800 text-cyan-400 py-1'
+                                : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                          >
+                            mp4 (H264 Base)
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 font-mono">
+                        <div className="flex justify-between items-center font-sans">
+                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Target Video Bitrate</label>
+                          <span className="text-xs font-mono font-extrabold text-cyan-400">{videoBitrate} Mbps</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.5}
+                          max={12}
+                          step={0.5}
+                          value={videoBitrate}
+                          onChange={(e) => setVideoBitrate(parseFloat(e.target.value))}
+                          className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 font-sans">
+                        <div className="space-y-1.5">
+                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Target Rate (FPS)</label>
+                          <div className="flex gap-1">
+                            {[15, 24, 30].map((fps) => (
+                              <button
+                                key={fps}
+                                type="button"
+                                onClick={() => setTargetFps(fps as any)}
+                                className={`flex-1 py-1 border rounded text-[10px] font-bold transition cursor-pointer ${
+                                  targetFps === fps
+                                    ? 'bg-cyan-505/20 border-cyan-555 text-cyan-400'
+                                    : 'bg-slate-950 border-slate-850 hover:bg-slate-900 text-slate-500'
+                                }`}
+                              >
+                                {fps}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setStripAudio(!stripAudio)}
+                          className={`flex items-center gap-1.5 justify-center border px-2.5 py-1.5 rounded-lg transition cursor-pointer text-[10px] font-bold ${
+                            stripAudio
+                              ? 'bg-rose-955/20 border-rose-500/30 text-rose-400 font-bold'
+                              : 'bg-slate-955 bg-slate-950 border-slate-855 text-slate-400 hover:text-slate-300'
+                          }`}
+                        >
+                          {stripAudio ? (
+                            <>
+                              <VolumeX className="h-3.5 w-3.5" /> Muted (No Audio)
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="h-3.5 w-3.5 text-cyan-400" /> Keep Audio
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                },
+                { 
+                  id: 'rotate', 
+                  title: 'Orientation / Rotate', 
+                  icon: <RefreshCw className="h-3.5 w-3.5 text-teal-500" />,
+                  desc: 'Adjust frame orientation',
+                  badge: videoRotation === 0 ? '0° (Original)' : `${videoRotation}° Swap`,
+                  content: (
+                    <div className="space-y-3 pt-2 border-t border-slate-800/50 mt-1">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Rotate Frame Angle</label>
+                        <div className="grid grid-cols-4 gap-1.5 font-sans">
+                          {([0, 90, 180, 270] as const).map((angle) => (
+                            <button
+                              key={angle}
+                              type="button"
+                              onClick={() => setVideoRotation(angle)}
+                              className={`py-1 border rounded-md transition text-[10px] font-bold cursor-pointer uppercase ${
+                                videoRotation === angle
+                                  ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400'
+                                  : 'bg-slate-950 border-slate-850 text-slate-400 hover:bg-slate-900'
+                              }`}
+                            >
+                              {angle === 0 ? '0°' : `${angle}°`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                },
+                { 
+                  id: 'watermark', 
+                  title: 'Overlay Watermark text', 
+                  icon: <Type className="h-3.5 w-3.5 text-purple-500" />,
+                  desc: 'Direct container text overlays',
+                  badge: overlayText ? `Text: "${overlayText}"` : 'None',
+                  content: (
+                    <div className="space-y-3 pt-2 border-t border-slate-800/50 mt-1">
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center font-sans">
+                          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Overlay Watermark text</label>
+                          {overlayText && (
+                            <button 
+                              type="button"
+                              onClick={() => setOverlayText('')}
+                              className="text-[9px] font-bold text-rose-455 hover:underline cursor-pointer font-sans"
+                            >
+                              Clear Text
+                            </button>
+                          )}
+                        </div>
+                        
+                        <input
+                          type="text"
+                          placeholder="Enter watermark overlay text..."
+                          value={overlayText}
+                          onChange={(e) => setOverlayText(e.target.value)}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs focus:outline-hidden focus:border-cyan-400"
+                        />
+
+                        {overlayText && (
+                          <div className="grid grid-cols-3 gap-2 pt-1 animate-fade-in text-[9px] bg-slate-950/45 p-2 rounded-lg border border-slate-855 font-sans">
+                            <div>
+                              <span className="text-[8px] text-slate-500 block mb-1 uppercase font-bold text-center">POSITION</span>
+                              <select
+                                value={overlayPos}
+                                onChange={(e: any) => setOverlayPos(e.target.value)}
+                                className="w-full px-1.5 py-1 bg-slate-900 border border-slate-855 rounded font-bold text-slate-300 cursor-pointer text-[9px]"
+                              >
+                                <option value="top">Top Center</option>
+                                <option value="center">Center</option>
+                                <option value="bottom">Bottom Center</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <span className="text-[8px] text-slate-500 block mb-1 uppercase font-bold text-center">COLOR</span>
+                              <select
+                                value={overlayColor}
+                                onChange={(e) => setOverlayColor(e.target.value)}
+                                className="w-full px-1.5 py-1 bg-slate-900 border border-slate-855 rounded font-bold text-slate-300 cursor-pointer text-[9px]"
+                              >
+                                <option value="#22d3ee">Cyan</option>
+                                <option value="#ffffff">White</option>
+                                <option value="#facc15">Yellow</option>
+                                <option value="#ec4899">Magenta</option>
+                                <option value="#000000">Black</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <span className="text-[8px] text-slate-550 block mb-1 uppercase font-bold text-center">SIZE ({overlaySize}px)</span>
+                              <input
+                                type="range"
+                                min={12}
+                                max={42}
+                                value={overlaySize}
+                                onChange={(e) => setOverlaySize(parseInt(e.target.value))}
+                                className="w-full h-1 mt-2 cursor-pointer accent-cyan-400 bg-slate-850"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                },
+                { 
+                  id: 'filter', 
+                  title: 'Creative Filter effects', 
+                  icon: <Sparkles className="h-3.5 w-3.5 text-pink-500" />,
+                  desc: 'Contrast presets and shaders',
+                  badge: videoFilter === 'normal' ? 'Original Filter' : videoFilter.toUpperCase(),
+                  content: (
+                    <div className="space-y-3 pt-2 border-t border-slate-800/50 mt-1">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block font-sans">Contrast Filter Shaders</label>
+                        <div className="grid grid-cols-3 gap-1.5 font-sans">
+                          {(['normal', 'winter', 'warm', 'noir', 'bw', 'cinema', 'cyberpunk'] as const).map((filter) => (
+                            <button
+                              key={filter}
+                              type="button"
+                              onClick={() => setVideoFilter(filter)}
+                              className={`py-1 rounded-md border text-[10px] font-bold transition capitalize cursor-pointer ${
+                                videoFilter === filter
+                                  ? 'bg-slate-800 text-cyan-400 border-cyan-500'
+                                  : 'bg-slate-950 border-slate-855 hover:bg-slate-900 text-slate-400'
+                              }`}
+                            >
+                              {filter === 'normal' ? 'Original' : filter === 'bw' ? 'B&W' : filter}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+              ].filter((step) => pipelineSteps.includes(step.id)).map((step) => {
+                const isEnabled = enabledSteps.includes(step.id);
+                const isActive = activeStepId === step.id;
+                return (
+                  <div
+                    key={step.id}
+                    className={`border rounded-xl transition-all duration-200 overflow-hidden ${
+                      isActive
+                        ? 'border-cyan-500/50 bg-slate-900 shadow-[0_0_12px_rgba(6,182,212,0.12)]'
+                        : isEnabled
+                        ? 'border-slate-800 bg-slate-950/45 hover:bg-slate-900'
+                        : 'border-slate-900 bg-slate-950/15 opacity-55'
+                    }`}
+                  >
+                    <div
+                      onClick={() => setActiveStepId(isActive ? null : step.id)}
+                      className="flex items-center justify-between p-3 cursor-pointer select-none"
+                    >
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEnabledSteps((prev) =>
+                              prev.includes(step.id)
+                                ? prev.filter((id) => id !== step.id)
+                                : [...prev, step.id]
+                            );
+                          }}
+                          title={isEnabled ? 'Disable Pipeline step' : 'Enable Pipeline step'}
+                          className={`h-4.5 w-4.5 rounded-md border flex items-center justify-center transition cursor-pointer ${
+                            isEnabled
+                              ? 'bg-cyan-500 border-cyan-500 text-slate-950 font-bold'
+                              : 'bg-transparent border-slate-700 text-transparent'
+                          }`}
+                        >
+                          <Check className="h-3 w-3 stroke-[3]" />
+                        </button>
+
+                        <div className="flex items-center gap-2 font-sans font-medium">
+                          {step.icon}
+                          <div>
+                            <span className={`text-[11px] font-semibold block leading-tight ${isEnabled ? 'text-slate-100' : 'text-slate-500'}`}>
+                              {step.title}
+                            </span>
+                            <span className="text-[9px] text-slate-500 block font-normal">{step.desc}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${isEnabled ? 'bg-slate-800 text-cyan-400 font-bold' : 'bg-slate-900 text-slate-600'}`}>
+                          {isEnabled ? step.badge : 'Bypassed'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPipelineSteps((prev) => prev.filter((id) => id !== step.id));
+                            setEnabledSteps((prev) => prev.filter((id) => id !== step.id));
+                            if (activeStepId === step.id) setActiveStepId(null);
+                          }}
+                          className="p-1 px-1.5 rounded bg-slate-955 hover:bg-rose-950/30 hover:text-rose-400 text-slate-500 border border-slate-850 hover:border-rose-900/40 transition cursor-pointer"
+                          title="Delete Step from video pipeline"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {isActive && (
+                      <div className="p-3 bg-slate-950/40 border-t border-slate-800/60 transition-all duration-300">
+                        {step.content}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           </div>
 
-          {/* Trigger Squish Button */}
-          <div className="mt-6 border-t border-slate-800 pt-5">
+          <div className="mt-6 border-t border-slate-800 pt-5 font-sans">
             <button
               onClick={handleSquishVideo}
               disabled={!videoFile || isProcessing}
@@ -992,7 +1291,7 @@ export default function VideoSquisher() {
               ) : (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  SQUISH VIDEO (COMPILE OFFLINE)
+                  SQUISH VIDEO (PIPELINE EXPORT)
                 </>
               )}
             </button>

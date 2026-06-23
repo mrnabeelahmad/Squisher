@@ -56,6 +56,18 @@ export default function App() {
     setResults([]);
   };
 
+  const handleResetAllImages = () => {
+    files.forEach((f) => URL.revokeObjectURL(f.originalUrl));
+    results.forEach((r) => {
+      if (r.processedUrl) {
+        URL.revokeObjectURL(r.processedUrl);
+      }
+    });
+    setFiles([]);
+    setSteps([]);
+    setResults([]);
+  };
+
   // Main high-concurrency canvas pipeline executor
   const handleProcessAll = async () => {
     if (files.length === 0 || steps.length === 0 || processing) return;
@@ -184,13 +196,15 @@ export default function App() {
       <header className="border-b border-slate-850 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-slate-900 border border-cyan-500/30 rounded-xl flex items-center justify-center shadow-[0_0_15px_rgba(34,211,238,0.25)] overflow-hidden shrink-0">
-              <img 
-                src={squisherLogo} 
-                alt="Squisher Icon" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
+            <div className="w-10 h-10 bg-gradient-to-tr from-cyan-950 to-slate-950 border border-cyan-500/30 rounded-xl flex items-center justify-center shadow-[0_0_15px_rgba(34,211,238,0.25)] shrink-0 overflow-hidden">
+              <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-7 h-7 text-cyan-400">
+                <rect x="20" y="20" width="60" height="60" rx="12" stroke="currentColor" strokeWidth="5" strokeDasharray="3 2" className="opacity-30" />
+                <path d="M25 50H42" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                <path d="M75 50H58" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+                <path d="M42 50L36 42M42 50L36 58" stroke="currentColor" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M58 50L64 42M58 50L64 58" stroke="currentColor" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="50" cy="50" r="5" fill="#facc15" className="animate-pulse" />
+              </svg>
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent flex items-center gap-2">
@@ -278,6 +292,7 @@ export default function App() {
                   steps={steps}
                   setSteps={setSteps}
                   onProcessAll={handleProcessAll}
+                  onResetAll={handleResetAllImages}
                   processing={processing}
                   hasFiles={files.length > 0}
                 />
