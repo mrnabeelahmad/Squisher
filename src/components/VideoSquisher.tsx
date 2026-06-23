@@ -713,6 +713,34 @@ export default function VideoSquisher() {
                 )}
               </div>
 
+              {/* Result Download Bar immediately below the main video player */}
+              {latestProcessedVideo && (
+                <div className="bg-gradient-to-r from-emerald-950/80 to-teal-950/80 p-4 rounded-xl border border-emerald-500/40 shadow-lg animate-fade-in flex flex-col sm:flex-row items-center justify-between gap-3 font-sans mt-2">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                      <Sparkles className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">Squished Result Available!</h4>
+                      <p className="text-[10px] text-emerald-400 font-mono font-semibold">
+                        Size: {formatBytes(latestProcessedVideo.processedSize)} (-{Math.round(((latestProcessedVideo.originalSize - latestProcessedVideo.processedSize) / latestProcessedVideo.originalSize) * 100)}%)
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <a
+                      href={latestProcessedVideo.url}
+                      download={latestProcessedVideo.name}
+                      id="player-under-download-btn"
+                      className="flex-1 sm:flex-initial py-2 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition flex items-center justify-center gap-2 text-xs font-extrabold cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.4)] text-center font-sans"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download Squished Video
+                    </a>
+                  </div>
+                </div>
+              )}
+
               {/* Timeline control block */}
               <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-850 space-y-3.5">
                 <div className="flex items-center justify-between">
