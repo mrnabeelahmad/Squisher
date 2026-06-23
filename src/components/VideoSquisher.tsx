@@ -88,6 +88,10 @@ export default function VideoSquisher() {
 
   // History States
   const [processedVideos, setProcessedVideos] = useState<CompressedVideo[]>([]);
+  const [latestProcessedVideo, setLatestProcessedVideo] = useState<CompressedVideo | null>(null);
+  const [previewMode, setPreviewMode] = useState<'original' | 'processed'>('original');
+
+  const videoSourceBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Pipeline Step State
   const [pipelineSteps, setPipelineSteps] = useState<string[]>(['trim', 'crop', 'format']);
@@ -120,6 +124,8 @@ export default function VideoSquisher() {
     setOverlayPos('bottom');
     setVideoFilter('normal');
     setProcessedVideos([]);
+    setLatestProcessedVideo(null);
+    setPreviewMode('original');
 
     // Reset pipeline state
     setPipelineSteps(['trim', 'crop', 'format']);
@@ -147,6 +153,8 @@ export default function VideoSquisher() {
     setIsLoadingFile(true);
     setIsPlaying(false);
     setCurrentTime(0);
+    setLatestProcessedVideo(null);
+    setPreviewMode('original');
 
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl);
@@ -456,8 +464,15 @@ export default function VideoSquisher() {
       };
 
       setProcessedVideos(prev => [newRes, ...prev]);
+      setLatestProcessedVideo(newRes);
+      setPreviewMode('processed');
       setIsProcessing(false);
       setProcessingProgress(0);
+
+      // Smoothly scroll the user to the top at the video player
+      setTimeout(() => {
+        videoSourceBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
 
     } catch (err: any) {
       console.error('Server-side processing error:', err);
@@ -485,7 +500,7 @@ export default function VideoSquisher() {
       {/* LEFT COLUMN: Input File & Preview Controls */}
       <section className="xl:col-span-7 flex flex-col gap-6">
         {/* Upload Container */}
-        <div id="video-source-box" className="p-6 rounded-2xl bg-slate-900/50 backdrop-blur-md border border-slate-800/80 shadow-lg flex flex-col gap-4">
+        <div ref={videoSourceBoxRef} id="video-source-box" className="p-6 rounded-2xl bg-slate-900/50 backdrop-blur-md border border-slate-800/80 shadow-lg flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <FileVideo className="h-5 w-5 text-cyan-400" />
@@ -544,27 +559,75 @@ export default function VideoSquisher() {
                 </div>
               </div>
 
+              {/* Preview Toggle & Download Bar */}
+              {latestProcessedVideo && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950/95 p-3 rounded-xl border border-cyan-500/30 shadow-lg animate-fade-in font-sans">
+                  <div className="flex gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('original')}
+                      className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${
+                        previewMode === 'original'
+                          ? 'bg-slate-800 text-cyan-400 font-extrabold shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Original Preview
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('processed')}
+                      className={`px-3 py-1 text-xs font-bold rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                        previewMode === 'processed'
+                          ? 'bg-cyan-500 text-slate-950 font-extrabold shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Squished Result
+                    </button>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/30">
+                      -{Math.round(((latestProcessedVideo.originalSize - latestProcessedVideo.processedSize) / latestProcessedVideo.originalSize) * 100)}% Size
+                    </span>
+                    <a
+                      href={latestProcessedVideo.url}
+                      download={latestProcessedVideo.name}
+                      id="top-download-btn"
+                      className="py-1.5 px-3 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:opacity-90 text-white transition flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer shadow-[0_0_12px_rgba(16,185,129,0.3)]"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download Squished
+                    </a>
+                  </div>
+                </div>
+              )}
+
               {/* Player Canvas Frame */}
               <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-slate-850 flex items-center justify-center group select-none">
                 <video
                   ref={videoPlayerRef}
-                  src={videoUrl}
+                  src={previewMode === 'processed' && latestProcessedVideo ? latestProcessedVideo.url : videoUrl}
                   onClick={togglePlay}
                   onTimeUpdate={handleTimeUpdate}
                   className="max-h-full max-w-full cursor-pointer h-full object-contain transition-transform duration-200"
                   style={{
-                    transform: `rotate(${videoRotation}deg)`,
-                    filter: videoFilter === 'winter' ? 'contrast(1.2) saturate(0.85) hue-rotate(10deg)' : 
-                            videoFilter === 'warm' ? 'contrast(1.1) sepia(40%) saturate(1.25)' : 
-                            videoFilter === 'noir' ? 'grayscale(100%) contrast(1.4)' : 
-                            videoFilter === 'bw' ? 'grayscale(100%)' : 
-                            videoFilter === 'cinema' ? 'contrast(1.25) saturate(0.9) brightness(0.95)' : 
-                            videoFilter === 'cyberpunk' ? 'hue-rotate(-45deg) saturate(1.6) contrast(1.1)' : 'none'
+                    transform: previewMode === 'processed' ? 'none' : `rotate(${videoRotation}deg)`,
+                    filter: previewMode === 'processed' ? 'none' : (
+                      videoFilter === 'winter' ? 'contrast(1.2) saturate(0.85) hue-rotate(10deg)' : 
+                      videoFilter === 'warm' ? 'contrast(1.1) sepia(40%) saturate(1.25)' : 
+                      videoFilter === 'noir' ? 'grayscale(100%) contrast(1.4)' : 
+                      videoFilter === 'bw' ? 'grayscale(100%)' : 
+                      videoFilter === 'cinema' ? 'contrast(1.25) saturate(0.9) brightness(0.95)' : 
+                      videoFilter === 'cyberpunk' ? 'hue-rotate(-45deg) saturate(1.6) contrast(1.1)' : 'none'
+                    )
                   }}
                 />
                 
                 {/* Visual Watermark Overlay Simulator */}
-                {overlayText && (
+                {overlayText && previewMode !== 'processed' && (
                   <div 
                     className={`absolute left-0 right-0 text-center pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] px-4 font-bold select-none`}
                     style={{
@@ -580,10 +643,10 @@ export default function VideoSquisher() {
                 )}
 
                 {/* Sub-cover for Cool / warm manual overlays on player */}
-                {videoFilter === 'winter' && (
+                {videoFilter === 'winter' && previewMode !== 'processed' && (
                   <div className="absolute inset-0 pointer-events-none bg-cyan-500/5 mix-blend-overlay" />
                 )}
-                {videoFilter === 'warm' && (
+                {videoFilter === 'warm' && previewMode !== 'processed' && (
                   <div className="absolute inset-0 pointer-events-none bg-orange-500/5 mix-blend-overlay" />
                 )}
 
