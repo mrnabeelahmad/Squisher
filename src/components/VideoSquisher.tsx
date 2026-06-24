@@ -450,35 +450,191 @@ export default function VideoSquisher() {
         }
         result = apiResult;
       } catch (err: any) {
-        console.warn('Server processing failed, activating high-performance client-side simulation:', err);
-        setProcessStatus('Server offline. Initializing local browser media pipeline...');
-        await new Promise(r => setTimeout(r, 600));
-        
-        setProcessingProgress(45);
-        setProcessStatus('Applying offline filters & timeline operations in browser buffer...');
-        await new Promise(r => setTimeout(r, 800));
+        console.warn('Server processing failed, activating browser-side high-performance transcode engine:', err);
+        setProcessStatus('Server offline. Launching browser-side media pipeline...');
+        setProcessingProgress(5);
 
-        setProcessingProgress(80);
-        setProcessStatus('Optimizing keyframes & compiling stream...');
-        await new Promise(r => setTimeout(r, 600));
+        // Run full client-side canvas + MediaRecorder transcode
+        const processedBlob = await new Promise<Blob>((resolve, reject) => {
+          const video = document.createElement('video');
+          video.src = URL.createObjectURL(videoFile);
+          video.muted = true;
+          video.playsInline = true;
 
-        // Create local blob URL from the uploaded file as a fallback
-        const localBlobUrl = URL.createObjectURL(videoFile);
-        
-        // Simulate a compression ratio based on parameters
-        const scaleVal = parseFloat(String(resolutionScale)) || 1.0;
-        const compressionRatio = 0.45 * scaleVal * (outputFormat === 'webm' ? 0.8 : 1.0);
-        const processedSize = Math.round(videoFile.size * compressionRatio);
+          // Prevent infinite hanging if there's a load failure
+          const loadTimeout = setTimeout(() => {
+            reject(new Error('Local video load timed out.'));
+          }, 8000);
 
+          video.onloadedmetadata = () => {
+            clearTimeout(loadTimeout);
+            try {
+              const canvas = document.createElement('canvas');
+              const isRotated90or270 = finalRotation === 90 || finalRotation === 270;
+              canvas.width = isRotated90or270 ? destHeight : destWidth;
+              canvas.height = isRotated90or270 ? destWidth : destHeight;
+
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                throw new Error('Canvas 2D context not available');
+              }
+
+              const fps = finalFps || 30;
+              const stream = canvas.captureStream(fps);
+
+              let mimeType = 'video/webm';
+              if (MediaRecorder.isTypeSupported(`video/${finalFormat}`)) {
+                mimeType = `video/${finalFormat}`;
+              } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+                mimeType = 'video/mp4';
+              } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+                mimeType = 'video/webm;codecs=vp9';
+              } else if (MediaRecorder.isTypeSupported('video/webm')) {
+                mimeType = 'video/webm';
+              }
+
+              const chunks: Blob[] = [];
+              const recorder = new MediaRecorder(stream, { mimeType });
+
+              recorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                  chunks.push(e.data);
+                }
+              };
+
+              recorder.onstop = () => {
+                const finalBlob = new Blob(chunks, { type: mimeType });
+                resolve(finalBlob);
+              };
+
+              const duration = finalTrimEnd - finalTrimStart;
+              let currentSec = finalTrimStart;
+              const frameInterval = 1 / fps;
+
+              video.currentTime = currentSec;
+              recorder.start();
+
+              const processNextFrame = () => {
+                if (currentSec > finalTrimEnd) {
+                  recorder.stop();
+                  return;
+                }
+
+                // Render video frame onto canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.save();
+
+                // Build CSS-like filters on Canvas context
+                let filterString = 'none';
+                if (finalVideoFilter === 'winter') filterString = 'contrast(1.2) saturate(0.85) hue-rotate(10deg)';
+                else if (finalVideoFilter === 'warm') filterString = 'contrast(1.1) sepia(40%) saturate(1.25)';
+                else if (finalVideoFilter === 'noir') filterString = 'grayscale(100%) contrast(1.4)';
+                else if (finalVideoFilter === 'bw') filterString = 'grayscale(100%)';
+                else if (finalVideoFilter === 'cinema') filterString = 'contrast(1.25) saturate(0.9) brightness(0.95)';
+                else if (finalVideoFilter === 'cyberpunk') filterString = 'hue-rotate(-45deg) saturate(1.6) contrast(1.1)';
+                ctx.filter = filterString;
+
+                // Handle Rotation Matrix
+                if (finalRotation === 90) {
+                  ctx.translate(canvas.width, 0);
+                  ctx.rotate((90 * Math.PI) / 180);
+                } else if (finalRotation === 180) {
+                  ctx.translate(canvas.width, canvas.height);
+                  ctx.rotate((180 * Math.PI) / 180);
+                } else if (finalRotation === 270) {
+                  ctx.translate(0, canvas.height);
+                  ctx.rotate((270 * Math.PI) / 180);
+                }
+
+                // Calculate Crop Areas
+                const sourceX = finalCropPreset !== 'none' ? cropX : 0;
+                const sourceY = finalCropPreset !== 'none' ? cropY : 0;
+                const sourceW = finalCropPreset !== 'none' ? cropWidth : video.videoWidth;
+                const sourceH = finalCropPreset !== 'none' ? cropHeight : video.videoHeight;
+
+                const drawW = isRotated90or270 ? canvas.height : canvas.width;
+                const drawH = isRotated90or270 ? canvas.width : canvas.height;
+
+                ctx.drawImage(video, sourceX, sourceY, sourceW, sourceH, 0, 0, drawW, drawH);
+                ctx.restore();
+
+                // Extra tint filters
+                if (finalVideoFilter === 'winter') {
+                  ctx.fillStyle = 'rgba(6, 182, 212, 0.04)';
+                  ctx.fillRect(0, 0, canvas.width, canvas.height);
+                } else if (finalVideoFilter === 'warm') {
+                  ctx.fillStyle = 'rgba(249, 115, 22, 0.04)';
+                  ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+
+                // Text overlay drawing
+                if (finalOverlayText) {
+                  ctx.font = `bold ${overlaySize}px "Inter", sans-serif`;
+                  ctx.fillStyle = overlayColor || '#22d3ee';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  
+                  ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+                  ctx.shadowBlur = 6;
+                  ctx.shadowOffsetX = 2;
+                  ctx.shadowOffsetY = 2;
+
+                  const tx = canvas.width / 2;
+                  let ty = canvas.height - 35;
+                  if (overlayPos === 'top') {
+                    ty = 35;
+                  } else if (overlayPos === 'center') {
+                    ty = canvas.height / 2;
+                  }
+                  ctx.fillText(finalOverlayText, tx, ty);
+                }
+
+                // Set progress based on timeframe
+                const pct = Math.round(((currentSec - finalTrimStart) / duration) * 100);
+                setProcessingProgress(Math.min(98, Math.max(5, pct)));
+                setProcessStatus(`Offline encoding: ${pct}% complete...`);
+
+                // Seek next frame
+                currentSec += frameInterval;
+                if (currentSec <= finalTrimEnd) {
+                  video.currentTime = currentSec;
+                } else {
+                  recorder.stop();
+                }
+              };
+
+              video.onseeked = () => {
+                requestAnimationFrame(() => {
+                  processNextFrame();
+                });
+              };
+
+              // Start rendering loop
+              processNextFrame();
+            } catch (innerErr) {
+              reject(innerErr);
+            }
+          };
+
+          video.onerror = () => {
+            clearTimeout(loadTimeout);
+            reject(new Error('Unable to transcode: local file format mismatch.'));
+          };
+        });
+
+        setProcessingProgress(99);
+        setProcessStatus('Finalizing compression container...');
+
+        const localUrl = URL.createObjectURL(processedBlob);
         result = {
           success: true,
           id: `vid_local_${Date.now()}`,
-          filename: `squished_${videoFile.name.substring(0, videoFile.name.lastIndexOf('.')) || 'video'}.${outputFormat === 'webm' ? 'webm' : 'mp4'}`,
+          filename: `squished_${videoFile.name.substring(0, videoFile.name.lastIndexOf('.')) || 'video'}.${finalFormat}`,
           originalSize: videoFile.size,
-          processedSize: Math.min(processedSize, videoFile.size - 1024), // Ensure size is always smaller
+          processedSize: processedBlob.size,
           width: destWidth,
           height: destHeight,
-          url: localBlobUrl
+          url: localUrl
         };
       }
 
