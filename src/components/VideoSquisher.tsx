@@ -431,6 +431,15 @@ export default function VideoSquisher() {
 
       let result;
       try {
+        // Query server health to check if ffmpeg is available
+        const healthRes = await fetch('/api/health')
+          .then((r) => r.json())
+          .catch(() => ({ hasFfmpeg: false }));
+
+        if (!healthRes.hasFfmpeg) {
+          throw new Error('FFMPEG_MISSING_ON_SERVER');
+        }
+
         const response = await fetch('/api/process-video', {
           method: 'POST',
           body: formData,
@@ -450,8 +459,8 @@ export default function VideoSquisher() {
         }
         result = apiResult;
       } catch (err: any) {
-        console.warn('Server processing failed, activating browser-side high-performance transcode engine:', err);
-        setProcessStatus('Server offline. Launching browser-side media pipeline...');
+        console.warn('Server processing failed or bypassed, activating browser-side high-performance transcode engine:', err);
+        setProcessStatus('Launching browser-side media pipeline...');
         setProcessingProgress(5);
 
         // Run full client-side canvas + MediaRecorder transcode
@@ -481,6 +490,27 @@ export default function VideoSquisher() {
 
               const fps = finalFps || 30;
               const stream = canvas.captureStream(fps);
+
+              // Extract and preserve audio track from source video unless stripping audio is requested
+              if (finalStripAudio !== true && finalStripAudio !== 'true') {
+                try {
+                  const videoStream = (video as any).captureStream 
+                    ? (video as any).captureStream() 
+                    : (video as any).mozCaptureStream 
+                    ? (video as any).mozCaptureStream() 
+                    : null;
+                  
+                  if (videoStream) {
+                    const audioTracks = videoStream.getAudioTracks();
+                    if (audioTracks && audioTracks.length > 0) {
+                      stream.addTrack(audioTracks[0]);
+                      console.log('Successfully bound native audio channel to transcode stream.');
+                    }
+                  }
+                } catch (audioErr) {
+                  console.warn('Could not capture audio track for client-side transcode:', audioErr);
+                }
+              }
 
               let mimeType = 'video/webm';
               if (MediaRecorder.isTypeSupported(`video/${finalFormat}`)) {
@@ -514,9 +544,13 @@ export default function VideoSquisher() {
               video.currentTime = currentSec;
               recorder.start();
 
+              let isSeeking = false;
+
               const processNextFrame = () => {
                 if (currentSec > finalTrimEnd) {
-                  recorder.stop();
+                  if (recorder.state === 'recording') {
+                    recorder.stop();
+                  }
                   return;
                 }
 
@@ -597,20 +631,35 @@ export default function VideoSquisher() {
                 // Seek next frame
                 currentSec += frameInterval;
                 if (currentSec <= finalTrimEnd) {
+                  isSeeking = true;
                   video.currentTime = currentSec;
                 } else {
-                  recorder.stop();
+                  if (recorder.state === 'recording') {
+                    recorder.stop();
+                  }
                 }
               };
 
               video.onseeked = () => {
-                requestAnimationFrame(() => {
-                  processNextFrame();
-                });
+                if (isSeeking) {
+                  isSeeking = false;
+                  requestAnimationFrame(() => {
+                    processNextFrame();
+                  });
+                }
               };
 
-              // Start rendering loop
-              processNextFrame();
+              // Start rendering loop with isSeeking lock
+              isSeeking = true;
+              video.currentTime = currentSec;
+              
+              // Fallback if seeked doesn't fire
+              setTimeout(() => {
+                if (isSeeking) {
+                  isSeeking = false;
+                  processNextFrame();
+                }
+              }, 150);
             } catch (innerErr) {
               reject(innerErr);
             }
