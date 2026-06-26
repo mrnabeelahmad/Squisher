@@ -4,6 +4,7 @@ import fs from 'fs';
 import { exec, execSync } from 'child_process';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
+import ffmpegStatic from 'ffmpeg-static';
 
 const app = express();
 const PORT = 3000;
@@ -45,13 +46,77 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Check if ffmpeg is available
+let ffmpegPath = ffmpegStatic || 'ffmpeg';
 let hasFfmpeg = false;
+
 try {
-  execSync('ffmpeg -version', { stdio: 'ignore' });
-  hasFfmpeg = true;
-  console.log('✅ ffmpeg system binary found & ready.');
+  if (ffmpegStatic) {
+    execSync(`"${ffmpegStatic}" -version`, { stdio: 'ignore' });
+    hasFfmpeg = true;
+    ffmpegPath = ffmpegStatic;
+    console.log(`✅ ffmpeg-static binary found & verified at: ${ffmpegStatic}`);
+  } else {
+    throw new Error('ffmpegStatic path is null');
+  }
 } catch (e) {
-  console.warn('⚠️ ffmpeg binary NOT found in system PATH. Video processing will fall back to simulation mode or display warning.');
+  console.warn('⚠️ ffmpeg-static not working or unavailable. Trying global system ffmpeg...');
+  try {
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    ffmpegPath = 'ffmpeg';
+    hasFfmpeg = true;
+    console.log('✅ Global system ffmpeg binary found & ready.');
+  } catch (err) {
+    console.warn('⚠️ No functional ffmpeg binary found via ffmpeg-static or system PATH.');
+  }
+}
+
+// Find a system font for ffmpeg drawtext filter
+let cachedSystemFontPath: string | null = null;
+
+function searchForFont(dir: string, depth = 0): string | null {
+  if (depth > 4) return null; // Avoid deep traversals
+  try {
+    if (!fs.existsSync(dir)) return null;
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+      const fullPath = path.join(dir, file);
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) {
+        const found = searchForFont(fullPath, depth + 1);
+        if (found) return found;
+      } else if (file.endsWith('.ttf') || file.endsWith('.otf')) {
+        return fullPath;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+}
+
+function findSystemFont(): string | null {
+  const commonPaths = [
+    '/usr/share/fonts',
+    '/usr/lib/fonts',
+    '/usr/local/share/fonts',
+    '/etc/fonts'
+  ];
+  for (const p of commonPaths) {
+    const found = searchForFont(p);
+    if (found) return found;
+  }
+  return null;
+}
+
+try {
+  cachedSystemFontPath = findSystemFont();
+  if (cachedSystemFontPath) {
+    console.log(`✅ Found system font file for overlays: ${cachedSystemFontPath}`);
+  } else {
+    console.warn('⚠️ No system font (.ttf/.otf) found. Text overlays on server-side might fail if drawtext cannot locate a font.');
+  }
+} catch (e) {
+  console.warn('Error during system font search:', e);
 }
 
 // API: Health status and capability interrogation
@@ -226,9 +291,14 @@ app.post('/api/process-video', upload.single('video'), async (req, res) => {
     } else if (overlayPos === 'center') {
       yPos = '(h-text_h)/2';
     }
-    // We utilize direct drawing without forcing external fonts to avoid missing font file failures on custom/sandboxed hosts
     const sanitizedColor = overlayColor.startsWith('#') ? overlayColor : `#${overlayColor}`;
-    filters.push(`drawtext=text='${escapedText}':fontcolor=${sanitizedColor}:fontsize=${overlaySize}:x=(w-text_w)/2:y=${yPos}`);
+    
+    let fontOpt = '';
+    if (cachedSystemFontPath) {
+      const escapedFontPath = cachedSystemFontPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      fontOpt = `:fontfile='${escapedFontPath}'`;
+    }
+    filters.push(`drawtext=text='${escapedText}'${fontOpt}:fontcolor=${sanitizedColor}:fontsize=${overlaySize}:x=(w-text_w)/2:y=${yPos}`);
   }
 
   // Assemble absolute commands
@@ -253,7 +323,7 @@ app.post('/api/process-video', upload.single('video'), async (req, res) => {
       const filteredList = filters.filter(f => !f.startsWith('drawtext'));
       finalFilterString = filteredList.length > 0 ? `-vf "${filteredList.join(',')}"` : '';
     }
-    return `ffmpeg -y ${trimString} -i "${inputPath}" ${finalFilterString} -c:v ${videoCodec} -preset superfast -b:v ${bitrateVal}M -r ${targetFps} ${audioOptions} "${outputPath}"`;
+    return `"${ffmpegPath}" -y ${trimString} -i "${inputPath}" ${finalFilterString} -c:v ${videoCodec} -preset ultrafast -threads 0 -b:v ${bitrateVal}M -r ${targetFps} ${audioOptions} "${outputPath}"`;
   };
 
   const executeFfmpeg = (cmd: string) => {
@@ -308,6 +378,235 @@ app.post('/api/process-video', upload.single('video'), async (req, res) => {
     fs.unlink(inputPath, (unlinkErr) => {
       if (unlinkErr) console.warn('Temp input file removal failed:', unlinkErr);
     });
+  }
+});
+
+// API: Process & Merge Multiple Clips route
+app.post('/api/merge-clips', upload.single('video'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No video file provided' });
+  }
+
+  const inputPath = req.file.path;
+  const originalName = req.file.originalname;
+  const originalSize = req.file.size;
+
+  const {
+    clips: clipsRaw = '[]',
+    transition = 'none',
+    transitionColor = 'black',
+    cropPreset = 'none',
+    resolutionScale = '1.0',
+    videoBitrate = '8.0',
+    targetFps = '30',
+    stripAudio = 'false',
+    outputFormat = 'mp4',
+    overlayText = '',
+    overlayColor = '#22d3ee',
+    overlaySize = '24',
+    overlayPos = 'bottom',
+    videoFilter = 'normal',
+    cropWidth,
+    cropHeight,
+    cropX,
+    cropY,
+    destWidth,
+    destHeight,
+    videoRotation = '0'
+  } = req.body;
+
+  let clips: Array<{ start: number; end: number }> = [];
+  try {
+    clips = JSON.parse(clipsRaw);
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid clips format' });
+  }
+
+  if (clips.length === 0) {
+    return res.status(400).json({ error: 'No clips specified to merge' });
+  }
+
+  const outputExt = outputFormat === 'webm' ? 'webm' : 'mp4';
+  const outFilename = `merged_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${outputExt}`;
+  const outputPath = path.join(uploadsDir, outFilename);
+
+  const mergeDir = path.join(uploadsDir, `merge_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+  fs.mkdirSync(mergeDir, { recursive: true });
+
+  if (!hasFfmpeg) {
+    console.warn('ffmpeg missing in merge route: Simulating response');
+    setTimeout(() => {
+      try {
+        fs.copyFileSync(inputPath, outputPath);
+        fs.rmSync(mergeDir, { recursive: true, force: true });
+        return res.json({
+          success: true,
+          filename: outFilename,
+          processedSize: originalSize * 0.9,
+          originalSize: originalSize,
+          width: Number(destWidth) || 1280,
+          height: Number(destHeight) || 720,
+          url: `/api/video/${outFilename}`
+        });
+      } catch (err: any) {
+        return res.status(500).json({ error: `Simulation failed: ${err.message}` });
+      } finally {
+        fs.unlink(inputPath, () => {});
+      }
+    }, 1500);
+    return;
+  }
+
+  try {
+    // Generate base filter list
+    const baseFilters: string[] = [];
+
+    const rotAngle = parseInt(String(videoRotation)) || 0;
+    if (rotAngle === 90) {
+      baseFilters.push('transpose=1');
+    } else if (rotAngle === 180) {
+      baseFilters.push('transpose=2,transpose=2');
+    } else if (rotAngle === 270) {
+      baseFilters.push('transpose=3');
+    }
+
+    if (cropPreset !== 'none' || (cropWidth && cropHeight)) {
+      const cW = parseInt(String(cropWidth)) || 0;
+      const cH = parseInt(String(cropHeight)) || 0;
+      const cX = parseInt(String(cropX)) || 0;
+      const cY = parseInt(String(cropY)) || 0;
+      if (cW > 0 && cH > 0) {
+        baseFilters.push(`crop=${cW}:${cH}:${cX}:${cY}`);
+      }
+    }
+
+    const dW = parseInt(String(destWidth)) || 0;
+    const dH = parseInt(String(destHeight)) || 0;
+    if (dW > 0 && dH > 0) {
+      baseFilters.push(`scale=${dW}:${dH}`);
+    }
+
+    if (videoFilter === 'grayscale') {
+      baseFilters.push('hue=s=0');
+    } else if (videoFilter === 'sepia') {
+      baseFilters.push('colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131');
+    } else if (videoFilter === 'vintage') {
+      baseFilters.push('curves=vintage');
+    } else if (videoFilter === 'warm') {
+      baseFilters.push('colorbalance=rs=0.15:gs=0.05:bs=-0.1');
+    } else if (videoFilter === 'cool') {
+      baseFilters.push('colorbalance=rs=-0.1:gs=0.05:bs=0.15');
+    } else if (videoFilter === 'highcontrast') {
+      baseFilters.push('eq=contrast=1.3:brightness=0.05');
+    }
+
+    const intermediateFiles: string[] = [];
+
+    const executeCmd = (cmd: string) => {
+      return new Promise<void>((resolve, reject) => {
+        exec(cmd, (error, stdout, stderr) => {
+          if (error) {
+            console.error('ffmpeg merge execution error:', error);
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    };
+
+    // Process each individual clip segment
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      const startSec = clip.start;
+      const endSec = clip.end;
+      const duration = endSec - startSec;
+      const tempClipFilename = `clip_${i}.${outputExt}`;
+      const tempClipPath = path.join(mergeDir, tempClipFilename);
+
+      const clipFilters = [...baseFilters];
+
+      // Add text overlay if present
+      if (overlayText) {
+        const escapedText = overlayText.replace(/'/g, "'\\''");
+        let yPos = 'h-text_h-20';
+        if (overlayPos === 'top') {
+          yPos = '20';
+        } else if (overlayPos === 'center') {
+          yPos = '(h-text_h)/2';
+        }
+        const sanitizedColor = overlayColor.startsWith('#') ? overlayColor : `#${overlayColor}`;
+        let fontOpt = '';
+        if (cachedSystemFontPath) {
+          const escapedFontPath = cachedSystemFontPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+          fontOpt = `:fontfile='${escapedFontPath}'`;
+        }
+        clipFilters.push(`drawtext=text='${escapedText}'${fontOpt}:fontcolor=${sanitizedColor}:fontsize=${overlaySize}:x=(w-text_w)/2:y=${yPos}`);
+      }
+
+      // Add transition effects (fade-to-black, white, etc)
+      const audioFilters: string[] = [];
+      if (transition !== 'none' && duration > 0.1) {
+        const fadeDuration = Math.min(0.5, duration / 3);
+        const fadeColor = transitionColor === 'white' ? 'white' : transitionColor === 'custom' ? overlayColor : 'black';
+        
+        clipFilters.push(`fade=t=in:st=0:d=${fadeDuration}:color=${fadeColor}`);
+        clipFilters.push(`fade=t=out:st=${(duration - fadeDuration).toFixed(3)}:d=${fadeDuration}:color=${fadeColor}`);
+
+        if (stripAudio !== 'true') {
+          audioFilters.push(`afade=t=in:st=0:d=${fadeDuration}`);
+          audioFilters.push(`afade=t=out:st=${(duration - fadeDuration).toFixed(3)}:d=${fadeDuration}`);
+        }
+      }
+
+      const filterString = clipFilters.length > 0 ? `-vf "${clipFilters.join(',')}"` : '';
+      const audioFilterString = audioFilters.length > 0 ? `-af "${audioFilters.join(',')}"` : '';
+      const trimString = `-ss ${startSec} -to ${endSec}`;
+      const bitrateVal = parseFloat(videoBitrate) || 8.0;
+      const videoCodec = outputFormat === 'webm' ? 'libvpx-vp9' : 'libx264 -pix_fmt yuv420p';
+      const audioOptions = stripAudio === 'true' ? '-an' : (outputFormat === 'webm' ? `-c:a libopus ${audioFilterString}` : `-c:a aac ${audioFilterString}`);
+
+      const cmd = `"${ffmpegPath}" -y ${trimString} -i "${inputPath}" ${filterString} -c:v ${videoCodec} -preset ultrafast -threads 0 -b:v ${bitrateVal}M -r ${targetFps} ${audioOptions} "${tempClipPath}"`;
+      
+      console.log(`Processing intermediate clip segment ${i}:`, cmd);
+      await executeCmd(cmd);
+      intermediateFiles.push(tempClipPath);
+    }
+
+    // Write the concat list file
+    const concatListPath = path.join(mergeDir, 'concat_list.txt');
+    const concatContent = intermediateFiles.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
+    fs.writeFileSync(concatListPath, concatContent, 'utf8');
+
+    // Run direct concat demuxer
+    const concatCmd = `"${ffmpegPath}" -y -f concat -safe 0 -i "${concatListPath}" -c copy "${outputPath}"`;
+    console.log('Running concat demuxer:', concatCmd);
+    await executeCmd(concatCmd);
+
+    const finalStat = fs.statSync(outputPath);
+    console.log(`✅ Server-side merge completed! Original: ${originalSize} bytes, Merged: ${finalStat.size} bytes`);
+    
+    // Clean up merge directory
+    fs.rmSync(mergeDir, { recursive: true, force: true });
+
+    return res.json({
+      success: true,
+      filename: outFilename,
+      processedSize: finalStat.size,
+      originalSize: originalSize,
+      width: parseInt(destWidth) || 1280,
+      height: parseInt(destHeight) || 720,
+      url: `/api/video/${outFilename}`
+    });
+
+  } catch (err: any) {
+    console.error('Error merging clips:', err);
+    try {
+      fs.rmSync(mergeDir, { recursive: true, force: true });
+    } catch (_) {}
+    return res.status(500).json({ error: `Clips merging failed: ${err.message || err}` });
+  } finally {
+    fs.unlink(inputPath, () => {});
   }
 });
 

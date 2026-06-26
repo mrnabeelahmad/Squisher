@@ -20,7 +20,9 @@ import {
   ChevronDown,
   Share2,
   Crop,
-  RotateCcw
+  RotateCcw,
+  Plus,
+  Eye
 } from 'lucide-react';
 
 interface CompressedVideo {
@@ -35,6 +37,7 @@ interface CompressedVideo {
   filters: string;
   textOverlay: string;
   timestamp: string;
+  badge?: string;
 }
 
 export default function VideoSquisher() {
@@ -57,8 +60,8 @@ export default function VideoSquisher() {
 
   // Resize & Compression Options
   const [cropPreset, setCropPreset] = useState<'none' | '1:1' | '16:9' | '9:16' | '4:3'>('none');
-  const [resolutionScale, setResolutionScale] = useState<number>(0.75); // 0.25, 0.5, 0.75, 1.0
-  const [videoBitrate, setVideoBitrate] = useState<number>(2.5); // Mbps
+  const [resolutionScale, setResolutionScale] = useState<number>(1.0); // 0.25, 0.5, 0.75, 1.0 (default 100%)
+  const [videoBitrate, setVideoBitrate] = useState<number>(8.0); // Mbps (default high quality 8 Mbps)
   const [targetFps, setTargetFps] = useState<number>(30); // 15, 24, 30
   const [stripAudio, setStripAudio] = useState<boolean>(false);
   const [outputFormat, setOutputFormat] = useState<'webm' | 'mp4'>('webm');
@@ -90,13 +93,123 @@ export default function VideoSquisher() {
   const [processedVideos, setProcessedVideos] = useState<CompressedVideo[]>([]);
   const [latestProcessedVideo, setLatestProcessedVideo] = useState<CompressedVideo | null>(null);
   const [previewMode, setPreviewMode] = useState<'original' | 'processed'>('original');
+  const [downloadingUrl, setDownloadingUrl] = useState<string | null>(null);
+
+  // Multi-clip State
+  const [clips, setClips] = useState<{ id: string; name: string; start: number; end: number }[]>([]);
+  const [transition, setTransition] = useState<'none' | 'black' | 'white' | 'custom'>('none');
+  const [transitionColor, setTransitionColor] = useState<string>('#10b981');
 
   const videoSourceBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Pipeline Step State
-  const [pipelineSteps, setPipelineSteps] = useState<string[]>(['trim', 'crop', 'format']);
-  const [enabledSteps, setEnabledSteps] = useState<string[]>(['trim', 'crop', 'format']);
+  const [pipelineSteps, setPipelineSteps] = useState<string[]>(['trim', 'crop', 'format', 'watermark']);
+  const [enabledSteps, setEnabledSteps] = useState<string[]>(['trim']);
   const [activeStepId, setActiveStepId] = useState<string | null>('trim');
+
+  // Manual text input string states for Trimming
+  const [trimStartMinStr, setTrimStartMinStr] = useState<string>('0');
+  const [trimStartSecStr, setTrimStartSecStr] = useState<string>('0');
+  const [trimEndMinStr, setTrimEndMinStr] = useState<string>('0');
+  const [trimEndSecStr, setTrimEndSecStr] = useState<string>('0');
+  const [focusedField, setFocusedField] = useState<'startMin' | 'startSec' | 'endMin' | 'endSec' | null>(null);
+
+  // Sync state values to string fields when not currently typing
+  useEffect(() => {
+    if (videoMeta) {
+      if (focusedField !== 'startMin') {
+        const m = Math.floor(trimStart / 60);
+        setTrimStartMinStr(m.toString());
+      }
+      if (focusedField !== 'startSec') {
+        const s = trimStart % 60;
+        setTrimStartSecStr(s.toFixed(1));
+      }
+    }
+  }, [trimStart, videoMeta, focusedField]);
+
+  useEffect(() => {
+    if (videoMeta) {
+      if (focusedField !== 'endMin') {
+        const m = Math.floor(trimEnd / 60);
+        setTrimEndMinStr(m.toString());
+      }
+      if (focusedField !== 'endSec') {
+        const s = trimEnd % 60;
+        setTrimEndSecStr(s.toFixed(1));
+      }
+    }
+  }, [trimEnd, videoMeta, focusedField]);
+
+  const handleLiveTrimChange = (field: 'startMin' | 'startSec' | 'endMin' | 'endSec', value: string) => {
+    if (!videoMeta) return;
+
+    let startMin = field === 'startMin' ? (parseInt(value) || 0) : Math.floor(trimStart / 60);
+    let startSec = field === 'startSec' ? (parseFloat(value) || 0) : (trimStart % 60);
+    let endMin = field === 'endMin' ? (parseInt(value) || 0) : Math.floor(trimEnd / 60);
+    let endSec = field === 'endSec' ? (parseFloat(value) || 0) : (trimEnd % 60);
+
+    // If the value is empty, update the string state but don't set the slider state yet
+    if (value === '') return;
+
+    if (field === 'startMin' || field === 'startSec') {
+      const totalStart = startMin * 60 + startSec;
+      if (!isNaN(totalStart) && totalStart >= 0 && totalStart < trimEnd) {
+        setTrimStart(totalStart);
+        if (videoPlayerRef.current) {
+          videoPlayerRef.current.currentTime = totalStart;
+        }
+      }
+    } else if (field === 'endMin' || field === 'endSec') {
+      const totalEnd = endMin * 60 + endSec;
+      if (!isNaN(totalEnd) && totalEnd > trimStart && totalEnd <= videoMeta.duration) {
+        setTrimEnd(totalEnd);
+      }
+    }
+  };
+
+  const validateAndApplyTrim = () => {
+    if (!videoMeta) return;
+
+    let startMin = parseInt(trimStartMinStr) || 0;
+    let startSec = parseFloat(trimStartSecStr) || 0;
+    let endMin = parseInt(trimEndMinStr) || 0;
+    let endSec = parseFloat(trimEndSecStr) || 0;
+
+    let totalStart = startMin * 60 + startSec;
+    let totalEnd = endMin * 60 + endSec;
+
+    if (isNaN(totalStart) || totalStart < 0) {
+      totalStart = 0;
+    }
+    if (totalStart >= trimEnd) {
+      totalStart = Math.max(0, trimEnd - 0.1);
+    }
+
+    if (isNaN(totalEnd) || totalEnd > videoMeta.duration) {
+      totalEnd = videoMeta.duration;
+    }
+    if (totalEnd <= totalStart) {
+      totalEnd = Math.min(videoMeta.duration, totalStart + 0.1);
+    }
+
+    setTrimStart(totalStart);
+    setTrimEnd(totalEnd);
+
+    if (videoMeta.duration > 60) {
+      setTrimStartMinStr(Math.floor(totalStart / 60).toString());
+      setTrimStartSecStr((totalStart % 60).toFixed(1));
+      setTrimEndMinStr(Math.floor(totalEnd / 60).toString());
+      setTrimEndSecStr((totalEnd % 60).toFixed(1));
+    } else {
+      setTrimStartSecStr(totalStart.toFixed(1));
+      setTrimEndSecStr(totalEnd.toFixed(1));
+    }
+
+    if (videoPlayerRef.current) {
+      videoPlayerRef.current.currentTime = totalStart;
+    }
+  };
 
   const handleResetAllVideo = () => {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
@@ -110,9 +223,13 @@ export default function VideoSquisher() {
     setCurrentTime(0);
     setTrimStart(0);
     setTrimEnd(0);
+    setTrimStartMinStr('0');
+    setTrimStartSecStr('0');
+    setTrimEndMinStr('0');
+    setTrimEndSecStr('0');
     setCropPreset('none');
-    setResolutionScale(0.75);
-    setVideoBitrate(2.5);
+    setResolutionScale(1.0);
+    setVideoBitrate(8.0);
     setTargetFps(30);
     setStripAudio(false);
     setOutputFormat('webm');
@@ -126,10 +243,13 @@ export default function VideoSquisher() {
     setProcessedVideos([]);
     setLatestProcessedVideo(null);
     setPreviewMode('original');
+    setClips([]);
+    setTransition('none');
+    setTransitionColor('#10b981');
 
     // Reset pipeline state
-    setPipelineSteps(['trim', 'crop', 'format']);
-    setEnabledSteps(['trim', 'crop', 'format']);
+    setPipelineSteps(['trim', 'crop', 'format', 'watermark']);
+    setEnabledSteps(['trim']);
     setActiveStepId('trim');
   };
 
@@ -176,7 +296,7 @@ export default function VideoSquisher() {
         duration: tempVideo.duration || 0
       });
       setTrimStart(0);
-      setTrimEnd(Math.min(tempVideo.duration || 0, 15)); // Default 15 sec max preview
+      setTrimEnd(tempVideo.duration || 0); // Default to full video duration
       setIsLoadingFile(false);
     };
     tempVideo.onerror = () => {
@@ -721,9 +841,409 @@ export default function VideoSquisher() {
     }
   };
 
+  const handleProcessSingleClip = async (clip: { start: number; end: number; name: string }) => {
+    if (!videoFile || !videoMeta) return;
+
+    setIsProcessing(true);
+    setProcessingProgress(15);
+    setProcessStatus(`Processing clip "${clip.name}" (${clip.start.toFixed(1)}s - ${clip.end.toFixed(1)}s)...`);
+
+    try {
+      const isCropEnabled = enabledSteps.includes('crop');
+      const isRotateEnabled = enabledSteps.includes('rotate');
+      const isWatermarkEnabled = enabledSteps.includes('watermark');
+      const isFilterEnabled = enabledSteps.includes('filter');
+      const isFormatEnabled = enabledSteps.includes('format');
+
+      const finalRotation = isRotateEnabled ? videoRotation : 0;
+      const finalCropPreset = isCropEnabled ? cropPreset : 'none';
+      const finalCropFocus = isCropEnabled ? cropFocus : 'center';
+      const finalResolutionScale = isCropEnabled ? resolutionScale : 1.0;
+
+      const finalOverlayText = isWatermarkEnabled ? overlayText : '';
+      const finalVideoFilter = isFilterEnabled ? videoFilter : 'normal';
+
+      const finalFormat = isFormatEnabled ? outputFormat : 'mp4';
+      const finalBitrate = isFormatEnabled ? videoBitrate : 8.0;
+      const finalFps = isFormatEnabled ? targetFps : 30;
+      const finalStripAudio = isFormatEnabled ? stripAudio : false;
+
+      // 1. Resolve output coordinates & crops
+      let origWidth = videoMeta.width;
+      let origHeight = videoMeta.height;
+
+      if (finalRotation === 90 || finalRotation === 270) {
+        origWidth = videoMeta.height;
+        origHeight = videoMeta.width;
+      }
+      
+      let cropWidth = origWidth;
+      let cropHeight = origHeight;
+
+      if (finalCropPreset === '1:1') {
+        const side = Math.min(origWidth, origHeight);
+        cropWidth = side;
+        cropHeight = side;
+      } else if (finalCropPreset === '16:9') {
+        const targetHeight = Math.round((origWidth * 9) / 16);
+        if (targetHeight <= origHeight) {
+          cropHeight = targetHeight;
+        } else {
+          const targetWidth = Math.round((origHeight * 16) / 9);
+          cropWidth = targetWidth;
+        }
+      } else if (finalCropPreset === '9:16') {
+        const targetWidth = Math.round((origHeight * 9) / 16);
+        if (targetWidth <= origWidth) {
+          cropWidth = targetWidth;
+        } else {
+          const targetHeight = Math.round((origWidth * 16) / 9);
+          cropHeight = targetHeight;
+        }
+      } else if (finalCropPreset === '4:3') {
+        const targetWidth = Math.round((origHeight * 4) / 3);
+        if (targetWidth <= origWidth) {
+          cropWidth = targetWidth;
+        } else {
+          const targetHeight = Math.round((origWidth * 3) / 4);
+          cropHeight = targetHeight;
+        }
+      }
+
+      let cropX = Math.round((origWidth - cropWidth) / 2);
+      let cropY = Math.round((origHeight - cropHeight) / 2);
+
+      if (finalCropFocus === 'top') {
+        cropY = 0;
+      } else if (finalCropFocus === 'bottom') {
+        cropY = Math.max(0, origHeight - cropHeight);
+      } else if (finalCropFocus === 'left') {
+        cropX = 0;
+      } else if (finalCropFocus === 'right') {
+        cropX = Math.max(0, origWidth - cropWidth);
+      } else if (finalCropFocus === 'top-left') {
+        cropX = 0;
+        cropY = 0;
+      } else if (finalCropFocus === 'bottom-right') {
+        cropX = Math.max(0, origWidth - cropWidth);
+        cropY = Math.max(0, origHeight - cropHeight);
+      }
+
+      const destWidth = Math.round((cropWidth * finalResolutionScale) / 2) * 2;
+      const destHeight = Math.round((cropHeight * finalResolutionScale) / 2) * 2;
+
+      setProcessingProgress(35);
+
+      const formData = new FormData();
+      formData.append('video', videoFile);
+      formData.append('cropPreset', finalCropPreset);
+      formData.append('resolutionScale', String(finalResolutionScale));
+      formData.append('videoBitrate', String(finalBitrate));
+      formData.append('targetFps', String(finalFps));
+      formData.append('stripAudio', String(finalStripAudio));
+      formData.append('outputFormat', finalFormat);
+      formData.append('overlayText', finalOverlayText);
+      formData.append('overlayColor', overlayColor);
+      formData.append('overlaySize', String(overlaySize));
+      formData.append('overlayPos', overlayPos);
+      formData.append('videoFilter', finalVideoFilter);
+      formData.append('trimStart', String(clip.start));
+      formData.append('trimEnd', String(clip.end));
+      formData.append('cropWidth', String(cropWidth));
+      formData.append('cropHeight', String(cropHeight));
+      formData.append('cropX', String(cropX));
+      formData.append('cropY', String(cropY));
+      formData.append('destWidth', String(destWidth));
+      formData.append('destHeight', String(destHeight));
+      formData.append('videoRotation', String(finalRotation));
+      formData.append('cropFocus', finalCropFocus);
+
+      setProcessingProgress(50);
+      setProcessStatus(`Transcoding clip "${clip.name}" server-side...`);
+
+      const healthRes = await fetch('/api/health')
+        .then((r) => r.json())
+        .catch(() => ({ hasFfmpeg: false }));
+
+      let data;
+      if (healthRes.hasFfmpeg) {
+        const response = await fetch('/api/process-video', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(errText || 'Transcoding crashed on the server.');
+        }
+        data = await response.json();
+      } else {
+        // Local simulation fallback
+        setProcessingProgress(75);
+        await new Promise(r => setTimeout(r, 1000));
+        data = {
+          processedSize: videoFile.size * ((clip.end - clip.start) / videoMeta.duration) * 0.9,
+          width: destWidth,
+          height: destHeight,
+          url: videoUrl // Use local object URL
+        };
+      }
+
+      setProcessingProgress(100);
+
+      const newProcessed: CompressedVideo = {
+        id: `clip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        name: `${clip.name}.${finalFormat}`,
+        processedSize: data.processedSize,
+        originalSize: videoFile.size * ((clip.end - clip.start) / videoMeta.duration),
+        url: data.url,
+        width: data.width,
+        height: data.height,
+        duration: clip.end - clip.start,
+        filters: finalVideoFilter === 'normal' ? 'Original' : finalVideoFilter.toUpperCase(),
+        textOverlay: overlayText ? `"${overlayText}"` : 'None',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        badge: `${clip.start.toFixed(1)}s - ${clip.end.toFixed(1)}s`
+      };
+
+      setProcessedVideos(prev => [newProcessed, ...prev]);
+      setLatestProcessedVideo(newProcessed);
+      setPreviewMode('processed');
+      setProcessStatus('Completed successfully!');
+
+      setTimeout(() => {
+        videoSourceBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
+
+    } catch (err: any) {
+      console.error(err);
+      alert(`Clip processing failed: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleMergeClips = async () => {
+    if (!videoFile || !videoMeta || clips.length === 0) return;
+
+    setIsProcessing(true);
+    setProcessingProgress(15);
+    setProcessStatus(`Merging ${clips.length} clips with transition "${transition}"...`);
+
+    try {
+      const isCropEnabled = enabledSteps.includes('crop');
+      const isRotateEnabled = enabledSteps.includes('rotate');
+      const isWatermarkEnabled = enabledSteps.includes('watermark');
+      const isFilterEnabled = enabledSteps.includes('filter');
+      const isFormatEnabled = enabledSteps.includes('format');
+
+      const finalRotation = isRotateEnabled ? videoRotation : 0;
+      const finalCropPreset = isCropEnabled ? cropPreset : 'none';
+      const finalCropFocus = isCropEnabled ? cropFocus : 'center';
+      const finalResolutionScale = isCropEnabled ? resolutionScale : 1.0;
+
+      const finalOverlayText = isWatermarkEnabled ? overlayText : '';
+      const finalVideoFilter = isFilterEnabled ? videoFilter : 'normal';
+
+      const finalFormat = isFormatEnabled ? outputFormat : 'mp4';
+      const finalBitrate = isFormatEnabled ? videoBitrate : 8.0;
+      const finalFps = isFormatEnabled ? targetFps : 30;
+      const finalStripAudio = isFormatEnabled ? stripAudio : false;
+
+      // 1. Resolve output coordinates & crops
+      let origWidth = videoMeta.width;
+      let origHeight = videoMeta.height;
+
+      if (finalRotation === 90 || finalRotation === 270) {
+        origWidth = videoMeta.height;
+        origHeight = videoMeta.width;
+      }
+      
+      let cropWidth = origWidth;
+      let cropHeight = origHeight;
+
+      if (finalCropPreset === '1:1') {
+        const side = Math.min(origWidth, origHeight);
+        cropWidth = side;
+        cropHeight = side;
+      } else if (finalCropPreset === '16:9') {
+        const targetHeight = Math.round((origWidth * 9) / 16);
+        if (targetHeight <= origHeight) {
+          cropHeight = targetHeight;
+        } else {
+          const targetWidth = Math.round((origHeight * 16) / 9);
+          cropWidth = targetWidth;
+        }
+      } else if (finalCropPreset === '9:16') {
+        const targetWidth = Math.round((origHeight * 9) / 16);
+        if (targetWidth <= origWidth) {
+          cropWidth = targetWidth;
+        } else {
+          const targetHeight = Math.round((origWidth * 16) / 9);
+          cropHeight = targetHeight;
+        }
+      } else if (finalCropPreset === '4:3') {
+        const targetWidth = Math.round((origHeight * 4) / 3);
+        if (targetWidth <= origWidth) {
+          cropWidth = targetWidth;
+        } else {
+          const targetHeight = Math.round((origWidth * 3) / 4);
+          cropHeight = targetHeight;
+        }
+      }
+
+      let cropX = Math.round((origWidth - cropWidth) / 2);
+      let cropY = Math.round((origHeight - cropHeight) / 2);
+
+      if (finalCropFocus === 'top') {
+        cropY = 0;
+      } else if (finalCropFocus === 'bottom') {
+        cropY = Math.max(0, origHeight - cropHeight);
+      } else if (finalCropFocus === 'left') {
+        cropX = 0;
+      } else if (finalCropFocus === 'right') {
+        cropX = Math.max(0, origWidth - cropWidth);
+      } else if (finalCropFocus === 'top-left') {
+        cropX = 0;
+        cropY = 0;
+      } else if (finalCropFocus === 'bottom-right') {
+        cropX = Math.max(0, origWidth - cropWidth);
+        cropY = Math.max(0, origHeight - cropHeight);
+      }
+
+      const destWidth = Math.round((cropWidth * finalResolutionScale) / 2) * 2;
+      const destHeight = Math.round((cropHeight * finalResolutionScale) / 2) * 2;
+
+      setProcessingProgress(30);
+
+      const formData = new FormData();
+      formData.append('video', videoFile);
+      formData.append('clips', JSON.stringify(clips));
+      formData.append('transition', transition);
+      formData.append('transitionColor', transitionColor);
+      formData.append('cropPreset', finalCropPreset);
+      formData.append('resolutionScale', String(finalResolutionScale));
+      formData.append('videoBitrate', String(finalBitrate));
+      formData.append('targetFps', String(finalFps));
+      formData.append('stripAudio', String(finalStripAudio));
+      formData.append('outputFormat', finalFormat);
+      formData.append('overlayText', finalOverlayText);
+      formData.append('overlayColor', overlayColor);
+      formData.append('overlaySize', String(overlaySize));
+      formData.append('overlayPos', overlayPos);
+      formData.append('videoFilter', finalVideoFilter);
+      formData.append('cropWidth', String(cropWidth));
+      formData.append('cropHeight', String(cropHeight));
+      formData.append('cropX', String(cropX));
+      formData.append('cropY', String(cropY));
+      formData.append('destWidth', String(destWidth));
+      formData.append('destHeight', String(destHeight));
+      formData.append('videoRotation', String(finalRotation));
+      formData.append('cropFocus', finalCropFocus);
+
+      setProcessingProgress(45);
+      setProcessStatus('Merging multiple clips using FFMPEG Server...');
+
+      const healthRes = await fetch('/api/health')
+        .then((r) => r.json())
+        .catch(() => ({ hasFfmpeg: false }));
+
+      let data;
+      if (healthRes.hasFfmpeg) {
+        const response = await fetch('/api/merge-clips', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(errText || 'Merging clips failed on the server.');
+        }
+        data = await response.json();
+      } else {
+        // Simulation fallback
+        setProcessingProgress(80);
+        await new Promise(r => setTimeout(r, 1200));
+        data = {
+          processedSize: videoFile.size * 0.95,
+          width: destWidth,
+          height: destHeight,
+          url: videoUrl
+        };
+      }
+
+      setProcessingProgress(100);
+
+      const totalDuration = clips.reduce((acc, c) => acc + (c.end - c.start), 0);
+
+      const newProcessed: CompressedVideo = {
+        id: `merged_${Date.now()}`,
+        name: `merged_clips.${finalFormat}`,
+        processedSize: data.processedSize,
+        originalSize: videoFile.size,
+        url: data.url,
+        width: data.width,
+        height: data.height,
+        duration: totalDuration,
+        filters: finalVideoFilter === 'normal' ? 'Original' : finalVideoFilter.toUpperCase(),
+        textOverlay: overlayText ? `"${overlayText}"` : 'None',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        badge: `Merged (${clips.length} Clips)`
+      };
+
+      setProcessedVideos(prev => [newProcessed, ...prev]);
+      setLatestProcessedVideo(newProcessed);
+      setPreviewMode('processed');
+      setProcessStatus('Merged successfully!');
+
+      setTimeout(() => {
+        videoSourceBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
+
+    } catch (err: any) {
+      console.error(err);
+      alert(`Merging clips failed: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleRemoveHistoryItem = (id: string, url: string) => {
     URL.revokeObjectURL(url);
     setProcessedVideos(prev => prev.filter(v => v.id !== id));
+  };
+
+  const handleDownloadClick = async (e: React.MouseEvent<HTMLAnchorElement>, url: string, name: string) => {
+    if (url.startsWith('blob:')) {
+      return; // Local blob URLs work natively
+    }
+    e.preventDefault();
+    if (downloadingUrl) return;
+
+    setDownloadingUrl(url);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to download video file.');
+      const blob = await response.blob();
+      const localUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = localUrl;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => {
+        URL.revokeObjectURL(localUrl);
+      }, 8000);
+    } catch (err: any) {
+      console.warn('Iframe blob download failed, trying standard download attribute:', err);
+      // Fallback: create download trigger using direct iframe window/location
+      window.open(url, '_blank');
+    } finally {
+      setDownloadingUrl(null);
+    }
   };
 
   // Human file sizes formatting
@@ -835,11 +1355,23 @@ export default function VideoSquisher() {
                     <a
                       href={latestProcessedVideo.url}
                       download={latestProcessedVideo.name}
+                      onClick={(e) => handleDownloadClick(e, latestProcessedVideo.url, latestProcessedVideo.name)}
                       id="top-download-btn"
-                      className="py-1.5 px-3 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:opacity-90 text-white transition flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer shadow-[0_0_12px_rgba(16,185,129,0.3)]"
+                      className={`py-1.5 px-3 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:opacity-90 text-white transition flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer shadow-[0_0_12px_rgba(16,185,129,0.3)] ${
+                        downloadingUrl === latestProcessedVideo.url ? 'opacity-50 pointer-events-none' : ''
+                      }`}
                     >
-                      <Download className="h-3.5 w-3.5" />
-                      Download Squished
+                      {downloadingUrl === latestProcessedVideo.url ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          Downloading...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-3.5 w-3.5" />
+                          Download Squished
+                        </>
+                      )}
                     </a>
                   </div>
                 </div>
@@ -936,11 +1468,23 @@ export default function VideoSquisher() {
                     <a
                       href={latestProcessedVideo.url}
                       download={latestProcessedVideo.name}
+                      onClick={(e) => handleDownloadClick(e, latestProcessedVideo.url, latestProcessedVideo.name)}
                       id="player-under-download-btn"
-                      className="flex-1 sm:flex-initial py-2 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition flex items-center justify-center gap-2 text-xs font-extrabold cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.4)] text-center font-sans"
+                      className={`flex-1 sm:flex-initial py-2 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition flex items-center justify-center gap-2 text-xs font-extrabold cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.4)] text-center font-sans ${
+                        downloadingUrl === latestProcessedVideo.url ? 'opacity-50 pointer-events-none' : ''
+                      }`}
                     >
-                      <Download className="h-4 w-4" />
-                      Download Squished Video
+                      {downloadingUrl === latestProcessedVideo.url ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          Downloading...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-4 w-4" />
+                          Download Squished Video
+                        </>
+                      )}
                     </a>
                   </div>
                 </div>
@@ -1037,36 +1581,282 @@ export default function VideoSquisher() {
 
                     {/* Manual entry time inputs */}
                     <div className="grid grid-cols-2 gap-3 mt-1">
+                      {/* Trim Start */}
                       <div>
-                        <label className="text-[10px] text-slate-500 font-bold block mb-1">TRIM START (SECONDS)</label>
-                        <input
-                          type="number"
-                          step={0.1}
-                          min={0}
-                          max={trimEnd - 0.1}
-                          value={trimStart}
-                          onChange={(e) => {
-                            const val = Math.max(0, parseFloat(e.target.value) || 0);
-                            if (val < trimEnd) setTrimStart(val);
-                          }}
-                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
-                        />
+                        <label className="text-[10px] text-slate-500 font-bold block mb-1">
+                          TRIM START {videoMeta.duration > 60 ? '(MINS : SECS)' : '(SECONDS)'}
+                        </label>
+                        {videoMeta.duration > 60 ? (
+                          <div className="flex gap-1.5">
+                            <div className="relative flex-1">
+                              <input
+                                type="text"
+                                value={trimStartMinStr}
+                                onFocus={() => setFocusedField('startMin')}
+                                onBlur={() => {
+                                  setFocusedField(null);
+                                  validateAndApplyTrim();
+                                }}
+                                onChange={(e) => {
+                                  setTrimStartMinStr(e.target.value);
+                                  handleLiveTrimChange('startMin', e.target.value);
+                                }}
+                                placeholder="Min"
+                                className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                              />
+                            </div>
+                            <span className="text-slate-600 self-center font-bold font-mono">:</span>
+                            <div className="relative flex-1">
+                              <input
+                                type="text"
+                                value={trimStartSecStr}
+                                onFocus={() => setFocusedField('startSec')}
+                                onBlur={() => {
+                                  setFocusedField(null);
+                                  validateAndApplyTrim();
+                                }}
+                                onChange={(e) => {
+                                  setTrimStartSecStr(e.target.value);
+                                  handleLiveTrimChange('startSec', e.target.value);
+                                }}
+                                placeholder="Sec"
+                                className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            value={trimStartSecStr}
+                            onFocus={() => setFocusedField('startSec')}
+                            onBlur={() => {
+                              setFocusedField(null);
+                              validateAndApplyTrim();
+                            }}
+                            onChange={(e) => {
+                              setTrimStartSecStr(e.target.value);
+                              handleLiveTrimChange('startSec', e.target.value);
+                            }}
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                          />
+                        )}
                       </div>
+
+                      {/* Trim End */}
                       <div>
-                        <label className="text-[10px] text-slate-500 font-bold block mb-1">TRIM END (SECONDS)</label>
-                        <input
-                          type="number"
-                          step={0.1}
-                          min={trimStart + 0.1}
-                          max={videoMeta.duration}
-                          value={trimEnd}
-                          onChange={(e) => {
-                            const val = Math.min(videoMeta.duration, parseFloat(e.target.value) || videoMeta.duration);
-                            if (val > trimStart) setTrimEnd(val);
-                          }}
-                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
-                        />
+                        <label className="text-[10px] text-slate-500 font-bold block mb-1">
+                          TRIM END {videoMeta.duration > 60 ? '(MINS : SECS)' : '(SECONDS)'}
+                        </label>
+                        {videoMeta.duration > 60 ? (
+                          <div className="flex gap-1.5">
+                            <div className="relative flex-1">
+                              <input
+                                type="text"
+                                value={trimEndMinStr}
+                                onFocus={() => setFocusedField('endMin')}
+                                onBlur={() => {
+                                  setFocusedField(null);
+                                  validateAndApplyTrim();
+                                }}
+                                onChange={(e) => {
+                                  setTrimEndMinStr(e.target.value);
+                                  handleLiveTrimChange('endMin', e.target.value);
+                                }}
+                                placeholder="Min"
+                                className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                              />
+                            </div>
+                            <span className="text-slate-600 self-center font-bold font-mono">:</span>
+                            <div className="relative flex-1">
+                              <input
+                                type="text"
+                                value={trimEndSecStr}
+                                onFocus={() => setFocusedField('endSec')}
+                                onBlur={() => {
+                                  setFocusedField(null);
+                                  validateAndApplyTrim();
+                                }}
+                                onChange={(e) => {
+                                  setTrimEndSecStr(e.target.value);
+                                  handleLiveTrimChange('endSec', e.target.value);
+                                }}
+                                placeholder="Sec"
+                                className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            value={trimEndSecStr}
+                            onFocus={() => setFocusedField('endSec')}
+                            onBlur={() => {
+                              setFocusedField(null);
+                              validateAndApplyTrim();
+                            }}
+                            onChange={(e) => {
+                              setTrimEndSecStr(e.target.value);
+                              handleLiveTrimChange('endSec', e.target.value);
+                            }}
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                          />
+                        )}
                       </div>
+                    </div>
+
+                    {/* Multi-Clip Manager */}
+                    <div className="mt-5 pt-4 border-t border-slate-800/80 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wider flex items-center gap-1.5">
+                            <Scissors className="h-3.5 w-3.5 text-amber-500" />
+                            Multi-Clip Manager
+                          </h4>
+                          <p className="text-[10px] text-slate-500 mt-0.5">Trim multiple separate clips and download or merge them</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newClip = {
+                              id: `clip_${Date.now()}`,
+                              name: `Clip ${clips.length + 1}`,
+                              start: trimStart,
+                              end: trimEnd
+                            };
+                            setClips([...clips, newClip]);
+                          }}
+                          className="text-[10.5px] font-bold text-cyan-400 hover:text-cyan-300 transition bg-cyan-955/20 hover:bg-cyan-950/40 px-3 py-1.5 rounded-lg border border-cyan-900/40 cursor-pointer flex items-center gap-1"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Add Current Range
+                        </button>
+                      </div>
+
+                      {clips.length === 0 ? (
+                        <div className="text-center p-5 rounded-lg bg-slate-950/30 border border-slate-850 border-dashed text-slate-500">
+                          <p className="text-[11px]">No clips saved yet. Adjust the sliders above to select a range, then click <strong className="text-cyan-400 font-semibold">Add Current Range</strong>.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {/* Saved Clips List */}
+                          <div className="max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                            {clips.map((clip, index) => {
+                              const clipDuration = clip.end - clip.start;
+                              return (
+                                <div key={clip.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-2.5 rounded-lg bg-slate-950/50 border border-slate-850 hover:border-slate-800 transition">
+                                  <div className="flex-1 flex items-center gap-2">
+                                    <span className="text-[10px] font-mono text-slate-500 font-bold w-4">#{index + 1}</span>
+                                    <input
+                                      type="text"
+                                      value={clip.name}
+                                      onChange={(e) => {
+                                        const updated = clips.map(c => c.id === clip.id ? { ...c, name: e.target.value } : c);
+                                        setClips(updated);
+                                      }}
+                                      className="bg-transparent text-slate-200 text-xs font-semibold focus:outline-hidden focus:border-b focus:border-cyan-400 py-0.5 px-1 rounded flex-1 max-w-[120px]"
+                                    />
+                                    <div className="text-[10px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                                      {clip.start.toFixed(1)}s – {clip.end.toFixed(1)}s 
+                                      <span className="text-cyan-400 ml-1.5">({clipDuration.toFixed(1)}s)</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                                    {/* Seek to Clip start */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (videoPlayerRef.current) {
+                                          videoPlayerRef.current.currentTime = clip.start;
+                                        }
+                                      }}
+                                      title="Seek to clip start"
+                                      className="p-1.5 rounded bg-slate-900 hover:bg-slate-850 hover:text-cyan-400 text-slate-400 border border-slate-800 transition cursor-pointer"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    {/* Download Separately */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleProcessSingleClip(clip)}
+                                      title="Download this clip separately"
+                                      className="p-1.5 rounded bg-slate-900 hover:bg-slate-850 hover:text-emerald-400 text-slate-400 border border-slate-800 transition cursor-pointer flex items-center gap-1 text-[10px] font-bold px-2"
+                                    >
+                                      <Download className="h-3 w-3" />
+                                      <span className="hidden xs:inline">Compile</span>
+                                    </button>
+
+                                    {/* Delete Clip */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setClips(clips.filter(c => c.id !== clip.id));
+                                      }}
+                                      title="Delete clip"
+                                      className="p-1.5 rounded bg-slate-900 hover:bg-rose-950 hover:text-rose-400 text-slate-400 border border-slate-800 transition cursor-pointer"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Merging options */}
+                          {clips.length >= 2 && (
+                            <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-850 space-y-3 font-sans">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                                  <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                                  Merge transition effects
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[9px] text-slate-500 font-bold block mb-1">CHOOSE EFFECT</label>
+                                  <select
+                                    value={transition}
+                                    onChange={(e: any) => setTransition(e.target.value)}
+                                    className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 text-slate-300 rounded text-xs focus:outline-hidden focus:border-cyan-400"
+                                  >
+                                    <option value="none">Seamless Cut (None)</option>
+                                    <option value="black">Fade through Black</option>
+                                    <option value="white">Fade through White</option>
+                                    <option value="custom">Fade through Custom Color</option>
+                                  </select>
+                                </div>
+
+                                {transition === 'custom' && (
+                                  <div>
+                                    <label className="text-[9px] text-slate-500 font-bold block mb-1">TRANSITION COLOR</label>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="color"
+                                        value={transitionColor}
+                                        onChange={(e) => setTransitionColor(e.target.value)}
+                                        className="h-7 w-12 rounded bg-transparent border border-slate-800 cursor-pointer"
+                                      />
+                                      <span className="text-xs font-mono text-slate-400">{transitionColor}</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={handleMergeClips}
+                                className="w-full mt-1.5 py-2 px-4 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition flex items-center justify-center gap-2 text-xs font-extrabold cursor-pointer shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+                              >
+                                <Layers className="h-4 w-4" />
+                                Merge All Trimmed Clips
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1181,36 +1971,126 @@ export default function VideoSquisher() {
                       </p>
                       
                       <div className="grid grid-cols-2 gap-3">
+                        {/* Trim Start */}
                         <div>
-                          <label className="text-[9px] text-slate-500 font-bold block mb-1">TRIM START (SECONDS)</label>
-                          <input
-                            type="number"
-                            step={0.1}
-                            min={0}
-                            max={trimEnd > 0 ? trimEnd - 0.1 : 100}
-                            value={trimStart}
-                            onChange={(e) => {
-                              const val = Math.max(0, parseFloat(e.target.value) || 0);
-                              if (!videoMeta || val < trimEnd) setTrimStart(val);
-                            }}
-                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
-                          />
+                          <label className="text-[9px] text-slate-500 font-bold block mb-1">
+                            TRIM START {(videoMeta && videoMeta.duration > 60) ? '(MINS : SECS)' : '(SECONDS)'}
+                          </label>
+                          {(videoMeta && videoMeta.duration > 60) ? (
+                            <div className="flex gap-1.5">
+                              <div className="relative flex-1">
+                                <input
+                                  type="text"
+                                  value={trimStartMinStr}
+                                  onFocus={() => setFocusedField('startMin')}
+                                  onBlur={() => {
+                                    setFocusedField(null);
+                                    validateAndApplyTrim();
+                                  }}
+                                  onChange={(e) => {
+                                    setTrimStartMinStr(e.target.value);
+                                    handleLiveTrimChange('startMin', e.target.value);
+                                  }}
+                                  placeholder="Min"
+                                  className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                                />
+                              </div>
+                              <span className="text-slate-600 self-center font-bold font-mono">:</span>
+                              <div className="relative flex-1">
+                                <input
+                                  type="text"
+                                  value={trimStartSecStr}
+                                  onFocus={() => setFocusedField('startSec')}
+                                  onBlur={() => {
+                                    setFocusedField(null);
+                                    validateAndApplyTrim();
+                                  }}
+                                  onChange={(e) => {
+                                    setTrimStartSecStr(e.target.value);
+                                    handleLiveTrimChange('startSec', e.target.value);
+                                  }}
+                                  placeholder="Sec"
+                                  className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              value={trimStartSecStr}
+                              onFocus={() => setFocusedField('startSec')}
+                              onBlur={() => {
+                                  setFocusedField(null);
+                                  validateAndApplyTrim();
+                              }}
+                              onChange={(e) => {
+                                setTrimStartSecStr(e.target.value);
+                                handleLiveTrimChange('startSec', e.target.value);
+                              }}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                            />
+                          )}
                         </div>
+
+                        {/* Trim End */}
                         <div>
-                          <label className="text-[9px] text-slate-500 font-bold block mb-1">TRIM END (SECONDS)</label>
-                          <input
-                            type="number"
-                            step={0.1}
-                            min={trimStart + 0.1}
-                            max={videoMeta ? videoMeta.duration : 100}
-                            value={trimEnd}
-                            onChange={(e) => {
-                              if (!videoMeta) return;
-                              const val = Math.min(videoMeta.duration, parseFloat(e.target.value) || videoMeta.duration);
-                              if (val > trimStart) setTrimEnd(val);
-                            }}
-                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
-                          />
+                          <label className="text-[9px] text-slate-500 font-bold block mb-1">
+                            TRIM END {(videoMeta && videoMeta.duration > 60) ? '(MINS : SECS)' : '(SECONDS)'}
+                          </label>
+                          {(videoMeta && videoMeta.duration > 60) ? (
+                            <div className="flex gap-1.5">
+                              <div className="relative flex-1">
+                                <input
+                                  type="text"
+                                  value={trimEndMinStr}
+                                  onFocus={() => setFocusedField('endMin')}
+                                  onBlur={() => {
+                                    setFocusedField(null);
+                                    validateAndApplyTrim();
+                                  }}
+                                  onChange={(e) => {
+                                    setTrimEndMinStr(e.target.value);
+                                    handleLiveTrimChange('endMin', e.target.value);
+                                  }}
+                                  placeholder="Min"
+                                  className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                                />
+                              </div>
+                              <span className="text-slate-600 self-center font-bold font-mono">:</span>
+                              <div className="relative flex-1">
+                                <input
+                                  type="text"
+                                  value={trimEndSecStr}
+                                  onFocus={() => setFocusedField('endSec')}
+                                  onBlur={() => {
+                                    setFocusedField(null);
+                                    validateAndApplyTrim();
+                                  }}
+                                  onChange={(e) => {
+                                    setTrimEndSecStr(e.target.value);
+                                    handleLiveTrimChange('endSec', e.target.value);
+                                  }}
+                                  placeholder="Sec"
+                                  className="w-full text-center px-1.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              value={trimEndSecStr}
+                              onFocus={() => setFocusedField('endSec')}
+                              onBlur={() => {
+                                  setFocusedField(null);
+                                  validateAndApplyTrim();
+                              }}
+                              onChange={(e) => {
+                                setTrimEndSecStr(e.target.value);
+                                handleLiveTrimChange('endSec', e.target.value);
+                              }}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 text-slate-200 rounded text-xs font-mono focus:outline-hidden focus:border-cyan-400"
+                            />
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1707,9 +2587,21 @@ export default function VideoSquisher() {
                       <a
                         href={video.url}
                         download={video.name}
-                        className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 hover:text-white transition flex items-center justify-center gap-1 text-[11px] font-semibold cursor-pointer text-center"
+                        onClick={(e) => handleDownloadClick(e, video.url, video.name)}
+                        className={`flex-1 py-1.5 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 hover:text-white transition flex items-center justify-center gap-1 text-[11px] font-semibold cursor-pointer text-center ${
+                          downloadingUrl === video.url ? 'opacity-50 pointer-events-none' : ''
+                        }`}
                       >
-                        <Download className="h-3.5 w-3.5" /> Download
+                        {downloadingUrl === video.url ? (
+                          <>
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            Downloading...
+                          </>
+                        ) : (
+                          <>
+                            <Download className="h-3.5 w-3.5" /> Download
+                          </>
+                        )}
                       </a>
                       <button
                         type="button"
